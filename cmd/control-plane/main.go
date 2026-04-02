@@ -14,9 +14,10 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/security-brain/security-brain/internal/api"
-	"github.com/security-brain/security-brain/internal/domain"
 	"github.com/security-brain/security-brain/internal/audit"
 	"github.com/security-brain/security-brain/internal/correlate"
+	"github.com/security-brain/security-brain/internal/domain"
+	"github.com/security-brain/security-brain/internal/incidents"
 	"github.com/security-brain/security-brain/internal/ingest"
 	"github.com/security-brain/security-brain/internal/normalize"
 	"github.com/security-brain/security-brain/internal/playbooks"
@@ -58,10 +59,17 @@ func main() {
 	slog.Info("connecting to PostgreSQL")
 	auditStore, err := audit.NewStore(ctx, cfg.PostgresDSN)
 	if err != nil {
-		slog.Error("failed to connect to PostgreSQL", "error", err)
+		slog.Error("failed to connect to PostgreSQL for audit store", "error", err)
 		os.Exit(1)
 	}
 	defer auditStore.Close()
+
+	incidentStore, err := incidents.NewStore(ctx, cfg.PostgresDSN)
+	if err != nil {
+		slog.Error("failed to connect to PostgreSQL for incident store", "error", err)
+		os.Exit(1)
+	}
+	defer incidentStore.Close()
 
 	// 5. Build components.
 	auditWriter := audit.NewWriter(auditStore)
@@ -105,6 +113,10 @@ func main() {
 			"hypothesis", incident.ThreatHypothesis,
 		)
 
+		if insertErr := incidentStore.Insert(ctx, incident); insertErr != nil {
+			slog.Error("failed to store incident", "error", insertErr, "id", incident.IncidentID)
+		}
+
 		if recErr := auditWriter.RecordCorrelation(ctx, incident); recErr != nil {
 			slog.Error("audit record correlation failed", "error", recErr)
 		}
@@ -112,6 +124,12 @@ func main() {
 		if incident.PolicyDecision.Action != policytypes.ActionDetectOnly {
 			if execErr := executor.Execute(ctx, incident); execErr != nil {
 				slog.Error("playbook execution error", "error", execErr)
+				incident.ExecutionStatus = eventschema.StatusFailed
+			} else {
+				incident.ExecutionStatus = eventschema.StatusCompleted
+			}
+			if updateErr := incidentStore.Update(ctx, incident); updateErr != nil {
+				slog.Error("failed to update incident status", "error", updateErr, "id", incident.IncidentID)
 			}
 		}
 	})
@@ -121,7 +139,7 @@ func main() {
 	}
 
 	// 7. Start ingester and API server.
-	apiServer := api.NewServer(cfg.APIAddr, auditStore, playbookReg)
+	apiServer := api.NewServer(cfg.APIAddr, auditStore, incidentStore, playbookReg)
 
 	var g errgroup.Group
 	g.Go(func() error { return ingester.Start(ctx) })

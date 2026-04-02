@@ -7,7 +7,9 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/security-brain/security-brain/internal/audit"
+	"github.com/security-brain/security-brain/internal/incidents"
 	"github.com/security-brain/security-brain/pkg/eventschema"
 )
 
@@ -89,6 +91,97 @@ func (s *Server) handleGetPlaybook(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, pb)
+}
+
+// handleListIncidents queries incidents from the store with optional filters
+// passed as query parameters:
+//
+//	status          — filter by execution status (pending, executing, completed, failed, rolled_back)
+//	min_confidence  — minimum confidence score (float, 0.0–1.0)
+//	since           — RFC 3339 timestamp for lower time bound
+//	until           — RFC 3339 timestamp for upper time bound
+//	limit           — maximum number of incidents to return (default 100)
+func (s *Server) handleListIncidents(w http.ResponseWriter, r *http.Request) {
+	var filter incidents.IncidentFilter
+
+	if status := r.URL.Query().Get("status"); status != "" {
+		filter.Status = eventschema.ExecutionStatus(status)
+	}
+
+	if minConf := r.URL.Query().Get("min_confidence"); minConf != "" {
+		val, err := strconv.ParseFloat(minConf, 64)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid 'min_confidence' parameter: expected float")
+			return
+		}
+		filter.MinConfidence = val
+	}
+
+	if since := r.URL.Query().Get("since"); since != "" {
+		t, err := time.Parse(time.RFC3339, since)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid 'since' parameter: expected RFC 3339 timestamp")
+			return
+		}
+		filter.Since = t
+	}
+
+	if until := r.URL.Query().Get("until"); until != "" {
+		t, err := time.Parse(time.RFC3339, until)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid 'until' parameter: expected RFC 3339 timestamp")
+			return
+		}
+		filter.Until = t
+	}
+
+	if limitStr := r.URL.Query().Get("limit"); limitStr != "" {
+		limit, err := strconv.Atoi(limitStr)
+		if err != nil || limit < 1 {
+			writeError(w, http.StatusBadRequest, "invalid 'limit' parameter: expected positive integer")
+			return
+		}
+		filter.Limit = limit
+	}
+
+	results, err := s.incidentStore.Query(r.Context(), filter)
+	if err != nil {
+		slog.Error("incident query failed", "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to query incidents")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, results)
+}
+
+// handleGetIncident retrieves a single incident by its UUID, extracted from the
+// URL path. Returns 404 if no incident with that ID exists.
+func (s *Server) handleGetIncident(w http.ResponseWriter, r *http.Request) {
+	idStr := r.PathValue("id")
+	if idStr == "" {
+		writeError(w, http.StatusBadRequest, "incident id is required")
+		return
+	}
+
+	id, err := uuid.Parse(idStr)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid incident id: expected UUID")
+		return
+	}
+
+	incident, err := s.incidentStore.Get(r.Context(), id)
+	if err != nil {
+		slog.Error("incident get failed", "error", err, "id", id)
+		writeError(w, http.StatusInternalServerError, "failed to get incident")
+		return
+	}
+
+	if incident == nil {
+		writeError(w, http.StatusNotFound, "incident not found")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, incident)
 }
 
 // writeJSON serialises v as JSON with the given HTTP status code. If encoding

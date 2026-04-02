@@ -8,39 +8,46 @@ import (
 	"net/http"
 
 	"github.com/security-brain/security-brain/internal/audit"
+	"github.com/security-brain/security-brain/internal/incidents"
 	"github.com/security-brain/security-brain/internal/playbooks"
 )
 
 // Server is the HTTP server for the security-brain operator API.
 type Server struct {
-	httpServer *http.Server
-	mux        *http.ServeMux
-	auditStore *audit.Store
-	playbooks  *playbooks.Registry
+	httpServer    *http.Server
+	mux           *http.ServeMux
+	auditStore    *audit.Store
+	incidentStore *incidents.Store
+	playbooks     *playbooks.Registry
 }
 
 // NewServer creates a Server listening on addr with routes wired to the given
-// audit store and playbook registry.
+// audit store, incident store, and playbook registry.
 //
 // Routes (Go 1.22+ ServeMux patterns):
 //
-//	GET /healthz                 — health check
-//	GET /api/v1/audit            — query audit records
-//	GET /api/v1/playbooks        — list all playbooks
-//	GET /api/v1/playbooks/{id}   — get a specific playbook by ID
-func NewServer(addr string, auditStore *audit.Store, playbookReg *playbooks.Registry) *Server {
+//	GET /healthz                  — health check
+//	GET /api/v1/audit             — query audit records
+//	GET /api/v1/playbooks         — list all playbooks
+//	GET /api/v1/playbooks/{id}    — get a specific playbook by ID
+//	GET /api/v1/incidents         — list incidents with optional filters
+//	GET /api/v1/incidents/{id}    — get a specific incident by ID
+func NewServer(addr string, auditStore *audit.Store, incidentStore *incidents.Store, playbookReg *playbooks.Registry) *Server {
 	mux := http.NewServeMux()
 
 	s := &Server{
-		mux:        mux,
-		auditStore: auditStore,
-		playbooks:  playbookReg,
+		mux:           mux,
+		auditStore:    auditStore,
+		incidentStore: incidentStore,
+		playbooks:     playbookReg,
 	}
 
 	mux.HandleFunc("GET /healthz", s.handleHealth)
 	mux.HandleFunc("GET /api/v1/audit", s.handleListAudit)
 	mux.HandleFunc("GET /api/v1/playbooks", s.handleListPlaybooks)
 	mux.HandleFunc("GET /api/v1/playbooks/{id}", s.handleGetPlaybook)
+	mux.HandleFunc("GET /api/v1/incidents", s.handleListIncidents)
+	mux.HandleFunc("GET /api/v1/incidents/{id}", s.handleGetIncident)
 
 	s.httpServer = &http.Server{
 		Addr:    addr,
