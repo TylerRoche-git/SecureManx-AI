@@ -1,0 +1,1621 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Security Brain - Operator Dashboard</title>
+<style>
+:root {
+    --bg-primary: #1a1a2e;
+    --bg-card: #16213e;
+    --bg-accent: #0f3460;
+    --bg-input: #0d1b36;
+    --highlight: #e94560;
+    --success: #4ecca3;
+    --warning: #ffc107;
+    --info: #3498db;
+    --text-primary: #eee;
+    --text-secondary: #a0a0b8;
+    --text-muted: #6c6c88;
+    --border: #2a2a4a;
+    --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --font-mono: "Cascadia Code", "Fira Code", "JetBrains Mono", "SF Mono", Consolas, monospace;
+    --radius: 8px;
+    --shadow: 0 2px 12px rgba(0,0,0,0.3);
+}
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: var(--font-sans);
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+}
+
+/* Header */
+.header {
+    background: var(--bg-card);
+    border-bottom: 1px solid var(--border);
+    padding: 0 24px;
+    height: 56px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 100;
+    box-shadow: var(--shadow);
+}
+
+.header-left {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+}
+
+.header-title {
+    font-size: 18px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    color: var(--text-primary);
+}
+
+.header-title span {
+    color: var(--highlight);
+}
+
+.status-indicator {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    color: var(--text-secondary);
+}
+
+.status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--text-muted);
+    transition: background 0.3s;
+}
+
+.status-dot.ok {
+    background: var(--success);
+    box-shadow: 0 0 6px var(--success);
+}
+
+.status-dot.error {
+    background: var(--highlight);
+    box-shadow: 0 0 6px var(--highlight);
+}
+
+.header-right {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+}
+
+.toggle-group {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    color: var(--text-secondary);
+}
+
+.toggle-switch {
+    position: relative;
+    width: 36px;
+    height: 20px;
+    cursor: pointer;
+}
+
+.toggle-switch input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+
+.toggle-slider {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: var(--bg-accent);
+    border-radius: 10px;
+    transition: background 0.3s;
+}
+
+.toggle-slider::before {
+    content: "";
+    position: absolute;
+    width: 14px;
+    height: 14px;
+    left: 3px;
+    bottom: 3px;
+    background: var(--text-secondary);
+    border-radius: 50%;
+    transition: transform 0.3s, background 0.3s;
+}
+
+.toggle-switch input:checked + .toggle-slider {
+    background: var(--success);
+}
+
+.toggle-switch input:checked + .toggle-slider::before {
+    transform: translateX(16px);
+    background: white;
+}
+
+.version-label {
+    font-size: 12px;
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+}
+
+/* Layout */
+.layout {
+    display: flex;
+    margin-top: 56px;
+    min-height: calc(100vh - 56px);
+}
+
+/* Sidebar */
+.sidebar {
+    width: 200px;
+    min-width: 200px;
+    background: var(--bg-card);
+    border-right: 1px solid var(--border);
+    padding: 16px 0;
+    position: fixed;
+    top: 56px;
+    bottom: 0;
+    left: 0;
+    overflow-y: auto;
+}
+
+.nav-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 20px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    font-size: 14px;
+    transition: all 0.2s;
+    border-left: 3px solid transparent;
+    user-select: none;
+}
+
+.nav-item:hover {
+    background: rgba(15, 52, 96, 0.4);
+    color: var(--text-primary);
+}
+
+.nav-item.active {
+    background: rgba(15, 52, 96, 0.6);
+    color: var(--text-primary);
+    border-left-color: var(--highlight);
+}
+
+.nav-icon {
+    width: 18px;
+    text-align: center;
+    font-size: 15px;
+}
+
+/* Main */
+.main {
+    flex: 1;
+    margin-left: 200px;
+    padding: 24px;
+    min-width: 0;
+}
+
+/* Cards */
+.card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px;
+    margin-bottom: 20px;
+    box-shadow: var(--shadow);
+}
+
+.card-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-bottom: 16px;
+}
+
+/* Stats Row */
+.stats-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 16px;
+    margin-bottom: 20px;
+}
+
+.stat-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px;
+    box-shadow: var(--shadow);
+    text-align: center;
+}
+
+.stat-value {
+    font-size: 36px;
+    font-weight: 700;
+    color: var(--text-primary);
+    font-family: var(--font-mono);
+}
+
+.stat-label {
+    font-size: 13px;
+    color: var(--text-secondary);
+    margin-top: 4px;
+}
+
+/* System Status */
+.system-status {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 16px;
+}
+
+.status-field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.status-field-label {
+    font-size: 12px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.status-field-value {
+    font-size: 16px;
+    font-weight: 600;
+    font-family: var(--font-mono);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+/* Tables */
+.table-container {
+    overflow-x: auto;
+}
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+}
+
+thead th {
+    text-align: left;
+    padding: 10px 12px;
+    border-bottom: 2px solid var(--border);
+    color: var(--text-secondary);
+    font-weight: 600;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    white-space: nowrap;
+}
+
+tbody td {
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border);
+    color: var(--text-primary);
+    vertical-align: top;
+}
+
+tbody tr {
+    transition: background 0.15s;
+}
+
+tbody tr:hover {
+    background: rgba(15, 52, 96, 0.3);
+}
+
+tbody tr.clickable {
+    cursor: pointer;
+}
+
+.mono {
+    font-family: var(--font-mono);
+    font-size: 12px;
+}
+
+.truncated-id {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--info);
+    cursor: default;
+}
+
+/* Badges */
+.badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    white-space: nowrap;
+}
+
+.badge-pending {
+    background: rgba(255, 193, 7, 0.15);
+    color: var(--warning);
+    border: 1px solid rgba(255, 193, 7, 0.3);
+}
+
+.badge-executing {
+    background: rgba(52, 152, 219, 0.15);
+    color: var(--info);
+    border: 1px solid rgba(52, 152, 219, 0.3);
+}
+
+.badge-completed {
+    background: rgba(78, 204, 163, 0.15);
+    color: var(--success);
+    border: 1px solid rgba(78, 204, 163, 0.3);
+}
+
+.badge-failed {
+    background: rgba(233, 69, 96, 0.15);
+    color: var(--highlight);
+    border: 1px solid rgba(233, 69, 96, 0.3);
+}
+
+.badge-rolled_back {
+    background: rgba(255, 165, 0, 0.15);
+    color: #ffa500;
+    border: 1px solid rgba(255, 165, 0, 0.3);
+}
+
+.badge-detection {
+    background: rgba(108, 108, 136, 0.2);
+    color: var(--text-secondary);
+    border: 1px solid rgba(108, 108, 136, 0.3);
+}
+
+.badge-correlation {
+    background: rgba(52, 152, 219, 0.15);
+    color: var(--info);
+    border: 1px solid rgba(52, 152, 219, 0.3);
+}
+
+.badge-decision {
+    background: rgba(255, 193, 7, 0.15);
+    color: var(--warning);
+    border: 1px solid rgba(255, 193, 7, 0.3);
+}
+
+.badge-enforcement {
+    background: rgba(233, 69, 96, 0.15);
+    color: var(--highlight);
+    border: 1px solid rgba(233, 69, 96, 0.3);
+}
+
+.badge-recovery {
+    background: rgba(78, 204, 163, 0.15);
+    color: var(--success);
+    border: 1px solid rgba(78, 204, 163, 0.3);
+}
+
+/* Confidence bar */
+.confidence-bar-container {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.confidence-bar {
+    width: 60px;
+    height: 6px;
+    background: var(--bg-accent);
+    border-radius: 3px;
+    overflow: hidden;
+}
+
+.confidence-bar-fill {
+    height: 100%;
+    border-radius: 3px;
+    transition: width 0.3s;
+}
+
+.confidence-value {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    min-width: 36px;
+}
+
+/* Detail Panel */
+.detail-panel {
+    background: var(--bg-accent);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px;
+    margin-top: 16px;
+    animation: slideDown 0.2s ease-out;
+}
+
+@keyframes slideDown {
+    from { opacity: 0; transform: translateY(-8px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+.detail-panel h3 {
+    font-size: 15px;
+    margin-bottom: 16px;
+    color: var(--text-primary);
+}
+
+.detail-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 12px;
+    margin-bottom: 16px;
+}
+
+.detail-field {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.detail-label {
+    font-size: 11px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.detail-value {
+    font-size: 14px;
+    color: var(--text-primary);
+    font-family: var(--font-mono);
+    word-break: break-all;
+}
+
+.detail-section {
+    margin-top: 16px;
+}
+
+.detail-section h4 {
+    font-size: 13px;
+    color: var(--text-secondary);
+    margin-bottom: 8px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.json-block {
+    background: var(--bg-primary);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 12px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--text-primary);
+    overflow-x: auto;
+    white-space: pre-wrap;
+    word-break: break-all;
+    max-height: 300px;
+    overflow-y: auto;
+}
+
+/* Playbook Cards */
+.playbook-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    gap: 16px;
+}
+
+.playbook-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px;
+    cursor: pointer;
+    transition: all 0.2s;
+    box-shadow: var(--shadow);
+}
+
+.playbook-card:hover {
+    border-color: var(--highlight);
+    transform: translateY(-2px);
+    box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+}
+
+.playbook-card.expanded {
+    border-color: var(--highlight);
+}
+
+.playbook-name {
+    font-size: 16px;
+    font-weight: 600;
+    margin-bottom: 8px;
+    color: var(--text-primary);
+}
+
+.playbook-id {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-bottom: 12px;
+}
+
+.playbook-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+
+.playbook-meta-tag {
+    font-size: 12px;
+    padding: 2px 8px;
+    background: var(--bg-accent);
+    border-radius: 4px;
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+}
+
+.playbook-steps {
+    margin-top: 16px;
+    border-top: 1px solid var(--border);
+    padding-top: 12px;
+    animation: slideDown 0.2s ease-out;
+}
+
+.playbook-step {
+    display: flex;
+    gap: 12px;
+    padding: 8px 0;
+    border-bottom: 1px solid rgba(42, 42, 74, 0.5);
+}
+
+.playbook-step:last-child {
+    border-bottom: none;
+}
+
+.step-number {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    background: var(--bg-accent);
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+.step-content {
+    flex: 1;
+}
+
+.step-name {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 2px;
+}
+
+.step-desc {
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin-bottom: 4px;
+}
+
+.step-meta {
+    display: flex;
+    gap: 12px;
+    font-size: 11px;
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+}
+
+/* Test Events */
+.test-form {
+    max-width: 700px;
+}
+
+.preset-buttons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 16px;
+}
+
+.btn {
+    padding: 8px 16px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--bg-accent);
+    color: var(--text-primary);
+    font-size: 13px;
+    cursor: pointer;
+    transition: all 0.2s;
+    font-family: var(--font-sans);
+}
+
+.btn:hover {
+    background: var(--highlight);
+    border-color: var(--highlight);
+}
+
+.btn:active {
+    transform: scale(0.97);
+}
+
+.btn-primary {
+    background: var(--highlight);
+    border-color: var(--highlight);
+    font-weight: 600;
+}
+
+.btn-primary:hover {
+    background: #d63050;
+    border-color: #d63050;
+}
+
+.btn-success {
+    background: var(--success);
+    border-color: var(--success);
+    color: #1a1a2e;
+    font-weight: 600;
+}
+
+.btn-success:hover {
+    background: #3db88e;
+    border-color: #3db88e;
+}
+
+.btn-critical {
+    border-color: var(--highlight);
+    color: var(--highlight);
+}
+
+.btn-critical:hover {
+    background: var(--highlight);
+    color: white;
+}
+
+.btn-medium {
+    border-color: var(--warning);
+    color: var(--warning);
+}
+
+.btn-medium:hover {
+    background: var(--warning);
+    color: #1a1a2e;
+}
+
+.btn-low {
+    border-color: var(--success);
+    color: var(--success);
+}
+
+.btn-low:hover {
+    background: var(--success);
+    color: #1a1a2e;
+}
+
+textarea {
+    width: 100%;
+    min-height: 280px;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text-primary);
+    font-family: var(--font-mono);
+    font-size: 13px;
+    padding: 12px;
+    resize: vertical;
+    line-height: 1.5;
+}
+
+textarea:focus {
+    outline: none;
+    border-color: var(--highlight);
+}
+
+.form-label {
+    display: block;
+    font-size: 13px;
+    color: var(--text-secondary);
+    margin-bottom: 6px;
+    font-weight: 600;
+}
+
+.form-group {
+    margin-bottom: 16px;
+}
+
+.response-area {
+    margin-top: 16px;
+    padding: 12px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    font-family: var(--font-mono);
+    font-size: 13px;
+    min-height: 60px;
+    white-space: pre-wrap;
+    word-break: break-all;
+}
+
+.response-area.response-success {
+    border-color: var(--success);
+    color: var(--success);
+}
+
+.response-area.response-error {
+    border-color: var(--highlight);
+    color: var(--highlight);
+}
+
+.link-btn {
+    display: inline-block;
+    margin-top: 12px;
+    color: var(--info);
+    cursor: pointer;
+    font-size: 13px;
+    text-decoration: underline;
+}
+
+.link-btn:hover {
+    color: var(--text-primary);
+}
+
+/* Filter bar */
+.filter-bar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-bottom: 16px;
+    align-items: center;
+}
+
+.filter-bar select {
+    padding: 6px 12px;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text-primary);
+    font-size: 13px;
+    font-family: var(--font-sans);
+    cursor: pointer;
+}
+
+.filter-bar select:focus {
+    outline: none;
+    border-color: var(--highlight);
+}
+
+.filter-bar label {
+    font-size: 13px;
+    color: var(--text-secondary);
+}
+
+/* Loading / Empty states */
+.loading {
+    text-align: center;
+    color: var(--text-muted);
+    padding: 40px 0;
+    font-size: 14px;
+}
+
+.empty-state {
+    text-align: center;
+    color: var(--text-muted);
+    padding: 40px 0;
+    font-size: 14px;
+}
+
+/* Responsive */
+@media (max-width: 900px) {
+    .sidebar {
+        width: 56px;
+        min-width: 56px;
+    }
+    .nav-item {
+        padding: 10px 0;
+        justify-content: center;
+    }
+    .nav-label {
+        display: none;
+    }
+    .main {
+        margin-left: 56px;
+    }
+    .stats-row {
+        grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    }
+    .detail-grid {
+        grid-template-columns: 1fr;
+    }
+    .playbook-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+@media (max-width: 600px) {
+    .header {
+        padding: 0 12px;
+    }
+    .main {
+        padding: 12px;
+    }
+    .system-status {
+        grid-template-columns: 1fr 1fr;
+    }
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+}
+::-webkit-scrollbar-track {
+    background: var(--bg-primary);
+}
+::-webkit-scrollbar-thumb {
+    background: var(--bg-accent);
+    border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+    background: var(--border);
+}
+</style>
+</head>
+<body>
+
+<header class="header">
+    <div class="header-left">
+        <div class="header-title">Security <span>Brain</span></div>
+        <div class="status-indicator">
+            <div class="status-dot" id="headerStatusDot"></div>
+            <span id="headerStatusText">Connecting...</span>
+        </div>
+    </div>
+    <div class="header-right">
+        <label class="toggle-group">
+            <span>Auto-refresh</span>
+            <label class="toggle-switch">
+                <input type="checkbox" id="autoRefreshToggle" checked>
+                <span class="toggle-slider"></span>
+            </label>
+        </label>
+        <span class="version-label" id="headerVersion">v--</span>
+    </div>
+</header>
+
+<div class="layout">
+    <nav class="sidebar">
+        <div class="nav-item active" data-view="dashboard">
+            <span class="nav-icon">&#9632;</span>
+            <span class="nav-label">Dashboard</span>
+        </div>
+        <div class="nav-item" data-view="incidents">
+            <span class="nav-icon">&#9888;</span>
+            <span class="nav-label">Incidents</span>
+        </div>
+        <div class="nav-item" data-view="audit">
+            <span class="nav-icon">&#9776;</span>
+            <span class="nav-label">Audit Trail</span>
+        </div>
+        <div class="nav-item" data-view="playbooks">
+            <span class="nav-icon">&#9654;</span>
+            <span class="nav-label">Playbooks</span>
+        </div>
+        <div class="nav-item" data-view="test">
+            <span class="nav-icon">&#9881;</span>
+            <span class="nav-label">Test Events</span>
+        </div>
+    </nav>
+
+    <main class="main">
+        <!-- Dashboard View -->
+        <div id="view-dashboard" class="view">
+            <div class="card" id="systemStatusCard">
+                <div class="card-title">System Status</div>
+                <div class="system-status" id="systemStatusGrid">
+                    <div class="status-field">
+                        <span class="status-field-label">Status</span>
+                        <span class="status-field-value" id="sysStatus">
+                            <span class="status-dot" id="sysStatusDot"></span>
+                            <span id="sysStatusText">--</span>
+                        </span>
+                    </div>
+                    <div class="status-field">
+                        <span class="status-field-label">Sentinel</span>
+                        <span class="status-field-value" id="sysSentinel">--</span>
+                    </div>
+                    <div class="status-field">
+                        <span class="status-field-label">Version</span>
+                        <span class="status-field-value" id="sysVersion">--</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="stats-row" id="statsRow">
+                <div class="stat-card">
+                    <div class="stat-value" id="statTotalIncidents">--</div>
+                    <div class="stat-label">Total Incidents</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="statActiveIncidents">--</div>
+                    <div class="stat-label">Active Incidents</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="statAuditRecords">--</div>
+                    <div class="stat-label">Audit Records</div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-title">Recent Incidents</div>
+                <div class="table-container">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>ID</th>
+                                <th>Time</th>
+                                <th>Hypothesis</th>
+                                <th>Confidence</th>
+                                <th>Action</th>
+                                <th>Status</th>
+                            </tr>
+                        </thead>
+                        <tbody id="recentIncidentsBody">
+                            <tr><td colspan="6" class="loading">Loading...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- Incidents View -->
+        <div id="view-incidents" class="view" style="display:none;">
+            <div class="card">
+                <div class="card-title">Incidents</div>
+                <div class="table-container">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>ID</th>
+                                <th>Time</th>
+                                <th>Threat Hypothesis</th>
+                                <th>Confidence</th>
+                                <th>Asset Criticality</th>
+                                <th>Action</th>
+                                <th>Status</th>
+                            </tr>
+                        </thead>
+                        <tbody id="incidentsBody">
+                            <tr><td colspan="7" class="loading">Loading...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+                <div id="incidentDetailContainer"></div>
+            </div>
+        </div>
+
+        <!-- Audit Trail View -->
+        <div id="view-audit" class="view" style="display:none;">
+            <div class="card">
+                <div class="card-title">Audit Trail</div>
+                <div class="filter-bar">
+                    <label>Phase:</label>
+                    <select id="auditPhaseFilter">
+                        <option value="">All Phases</option>
+                        <option value="detection">Detection</option>
+                        <option value="correlation">Correlation</option>
+                        <option value="decision">Decision</option>
+                        <option value="enforcement">Enforcement</option>
+                        <option value="recovery">Recovery</option>
+                    </select>
+                </div>
+                <div class="table-container">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>ID</th>
+                                <th>Time</th>
+                                <th>Phase</th>
+                                <th>Actor</th>
+                                <th>Action Taken</th>
+                                <th>Policy Ref</th>
+                            </tr>
+                        </thead>
+                        <tbody id="auditBody">
+                            <tr><td colspan="6" class="loading">Loading...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- Playbooks View -->
+        <div id="view-playbooks" class="view" style="display:none;">
+            <div class="card">
+                <div class="card-title">Playbooks</div>
+                <div class="playbook-grid" id="playbooksGrid">
+                    <div class="loading">Loading...</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Test Events View -->
+        <div id="view-test" class="view" style="display:none;">
+            <div class="card">
+                <div class="card-title">Inject Test Event</div>
+                <div class="test-form">
+                    <div class="form-group">
+                        <span class="form-label">Presets</span>
+                        <div class="preset-buttons">
+                            <button class="btn btn-critical" id="presetCritical">Critical Event</button>
+                            <button class="btn btn-medium" id="presetMedium">Medium Event</button>
+                            <button class="btn btn-low" id="presetLow">Low Event</button>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label" for="eventJsonEditor">Event JSON</label>
+                        <textarea id="eventJsonEditor" spellcheck="false"></textarea>
+                    </div>
+                    <div class="form-group">
+                        <button class="btn btn-primary" id="submitEventBtn">Submit Event</button>
+                    </div>
+                    <div id="eventResponseArea" class="response-area" style="display:none;"></div>
+                    <div id="eventViewLink" class="link-btn" style="display:none;">View Incidents &rarr;</div>
+                </div>
+            </div>
+        </div>
+    </main>
+</div>
+
+<script>
+(function() {
+    "use strict";
+
+    /* ========== State ========== */
+    var currentView = "dashboard";
+    var autoRefreshEnabled = true;
+    var refreshIntervalId = null;
+    var expandedIncidentId = null;
+    var expandedPlaybookId = null;
+
+    /* ========== Helpers ========== */
+    function $(sel) { return document.querySelector(sel); }
+    function $$(sel) { return document.querySelectorAll(sel); }
+
+    function truncateId(uuid) {
+        if (!uuid) return "--";
+        var s = String(uuid);
+        return s.length > 8 ? s.substring(0, 8) : s;
+    }
+
+    function formatTime(ts) {
+        if (!ts) return "--";
+        var d = new Date(ts);
+        if (isNaN(d.getTime())) return ts;
+        var pad = function(n) { return n < 10 ? "0" + n : "" + n; };
+        return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate()) +
+               " " + pad(d.getHours()) + ":" + pad(d.getMinutes()) + ":" + pad(d.getSeconds());
+    }
+
+    function confidenceColor(val) {
+        if (val >= 0.7) return "var(--highlight)";
+        if (val >= 0.4) return "var(--warning)";
+        return "var(--success)";
+    }
+
+    function confidenceHtml(val) {
+        var pct = Math.round((val || 0) * 100);
+        var color = confidenceColor(val);
+        return '<div class="confidence-bar-container">' +
+            '<div class="confidence-bar"><div class="confidence-bar-fill" style="width:' + pct + '%;background:' + color + ';"></div></div>' +
+            '<span class="confidence-value">' + pct + '%</span>' +
+            '</div>';
+    }
+
+    function statusBadge(status) {
+        var s = status || "unknown";
+        return '<span class="badge badge-' + s + '">' + s.replace("_", " ") + '</span>';
+    }
+
+    function phaseBadge(phase) {
+        var p = phase || "unknown";
+        return '<span class="badge badge-' + p + '">' + p + '</span>';
+    }
+
+    function escapeHtml(text) {
+        var d = document.createElement("div");
+        d.appendChild(document.createTextNode(text));
+        return d.innerHTML;
+    }
+
+    function apiFetch(path) {
+        return fetch(path).then(function(r) {
+            if (!r.ok) throw new Error("HTTP " + r.status);
+            return r.json();
+        });
+    }
+
+    /* ========== Navigation ========== */
+    function switchView(viewName) {
+        currentView = viewName;
+        var views = $$(".view");
+        for (var i = 0; i < views.length; i++) {
+            views[i].style.display = "none";
+        }
+        var target = $("#view-" + viewName);
+        if (target) target.style.display = "block";
+
+        var items = $$(".nav-item");
+        for (var j = 0; j < items.length; j++) {
+            items[j].classList.toggle("active", items[j].getAttribute("data-view") === viewName);
+        }
+
+        expandedIncidentId = null;
+        expandedPlaybookId = null;
+        $("#incidentDetailContainer").innerHTML = "";
+
+        refreshCurrentView();
+    }
+
+    $$(".nav-item").forEach(function(item) {
+        item.addEventListener("click", function() {
+            switchView(item.getAttribute("data-view"));
+        });
+    });
+
+    /* ========== Auto-refresh ========== */
+    var autoRefreshToggle = $("#autoRefreshToggle");
+    autoRefreshToggle.addEventListener("change", function() {
+        autoRefreshEnabled = autoRefreshToggle.checked;
+        setupAutoRefresh();
+    });
+
+    function setupAutoRefresh() {
+        if (refreshIntervalId) {
+            clearInterval(refreshIntervalId);
+            refreshIntervalId = null;
+        }
+        if (autoRefreshEnabled) {
+            refreshIntervalId = setInterval(function() {
+                refreshCurrentView();
+            }, 10000);
+        }
+    }
+
+    function refreshCurrentView() {
+        fetchHealth();
+        if (currentView === "dashboard") {
+            fetchDashboardData();
+        } else if (currentView === "incidents") {
+            fetchIncidents();
+        } else if (currentView === "audit") {
+            fetchAudit();
+        } else if (currentView === "playbooks") {
+            fetchPlaybooks();
+        }
+    }
+
+    /* ========== Health ========== */
+    function fetchHealth() {
+        apiFetch("/healthz").then(function(data) {
+            var isOk = data.status === "ok";
+            var dot = $("#headerStatusDot");
+            var sysStatusDot = $("#sysStatusDot");
+            dot.className = "status-dot " + (isOk ? "ok" : "error");
+            sysStatusDot.className = "status-dot " + (isOk ? "ok" : "error");
+            $("#headerStatusText").textContent = isOk ? "Operational" : data.status;
+            $("#sysStatusText").textContent = data.status || "--";
+            $("#sysSentinel").textContent = data.sentinel || "--";
+            $("#sysVersion").textContent = data.version || "--";
+            $("#headerVersion").textContent = "v" + (data.version || "--");
+        }).catch(function() {
+            var dot = $("#headerStatusDot");
+            var sysStatusDot = $("#sysStatusDot");
+            dot.className = "status-dot error";
+            sysStatusDot.className = "status-dot error";
+            $("#headerStatusText").textContent = "Offline";
+            $("#sysStatusText").textContent = "unreachable";
+            $("#sysSentinel").textContent = "--";
+            $("#sysVersion").textContent = "--";
+            $("#headerVersion").textContent = "v--";
+        });
+    }
+
+    /* ========== Dashboard ========== */
+    function fetchDashboardData() {
+        fetchHealth();
+
+        apiFetch("/api/v1/incidents?limit=1000").then(function(incidents) {
+            var list = Array.isArray(incidents) ? incidents : [];
+            var total = list.length;
+            var active = 0;
+            for (var i = 0; i < list.length; i++) {
+                var s = list[i].execution_status;
+                if (s === "pending" || s === "executing") active++;
+            }
+            $("#statTotalIncidents").textContent = total;
+            $("#statActiveIncidents").textContent = active;
+
+            var recent = list.slice(0, 10);
+            renderRecentIncidents(recent);
+        }).catch(function() {
+            $("#statTotalIncidents").textContent = "0";
+            $("#statActiveIncidents").textContent = "0";
+            renderRecentIncidents([]);
+        });
+
+        apiFetch("/api/v1/audit?limit=1000").then(function(records) {
+            var list = Array.isArray(records) ? records : [];
+            $("#statAuditRecords").textContent = list.length;
+        }).catch(function() {
+            $("#statAuditRecords").textContent = "0";
+        });
+    }
+
+    function renderRecentIncidents(incidents) {
+        var tbody = $("#recentIncidentsBody");
+        if (!incidents || incidents.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="6" class="empty-state">No incidents recorded</td></tr>';
+            return;
+        }
+        var html = "";
+        for (var i = 0; i < incidents.length; i++) {
+            var inc = incidents[i];
+            var action = (inc.policy_decision && inc.policy_decision.action) ? inc.policy_decision.action : "--";
+            html += "<tr>" +
+                '<td class="truncated-id" title="' + escapeHtml(inc.incident_id || "") + '">' + truncateId(inc.incident_id) + "</td>" +
+                '<td class="mono">' + formatTime(inc.timestamp) + "</td>" +
+                "<td>" + escapeHtml(inc.threat_hypothesis || "--") + "</td>" +
+                "<td>" + confidenceHtml(inc.confidence_score) + "</td>" +
+                "<td>" + escapeHtml(action) + "</td>" +
+                "<td>" + statusBadge(inc.execution_status) + "</td>" +
+                "</tr>";
+        }
+        tbody.innerHTML = html;
+    }
+
+    /* ========== Incidents ========== */
+    function fetchIncidents() {
+        apiFetch("/api/v1/incidents?limit=50").then(function(incidents) {
+            renderIncidentsTable(Array.isArray(incidents) ? incidents : []);
+        }).catch(function() {
+            renderIncidentsTable([]);
+        });
+    }
+
+    function renderIncidentsTable(incidents) {
+        var tbody = $("#incidentsBody");
+        if (!incidents || incidents.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="7" class="empty-state">No incidents recorded</td></tr>';
+            return;
+        }
+        var html = "";
+        for (var i = 0; i < incidents.length; i++) {
+            var inc = incidents[i];
+            var action = (inc.policy_decision && inc.policy_decision.action) ? inc.policy_decision.action : "--";
+            var iid = inc.incident_id || "";
+            html += '<tr class="clickable" data-incident-id="' + escapeHtml(iid) + '">' +
+                '<td class="truncated-id" title="' + escapeHtml(iid) + '">' + truncateId(iid) + "</td>" +
+                '<td class="mono">' + formatTime(inc.timestamp) + "</td>" +
+                "<td>" + escapeHtml(inc.threat_hypothesis || "--") + "</td>" +
+                "<td>" + confidenceHtml(inc.confidence_score) + "</td>" +
+                "<td>" + escapeHtml(String(inc.asset_criticality || "--")) + "</td>" +
+                "<td>" + escapeHtml(action) + "</td>" +
+                "<td>" + statusBadge(inc.execution_status) + "</td>" +
+                "</tr>";
+        }
+        tbody.innerHTML = html;
+
+        var rows = tbody.querySelectorAll("tr.clickable");
+        for (var j = 0; j < rows.length; j++) {
+            rows[j].addEventListener("click", function() {
+                var id = this.getAttribute("data-incident-id");
+                toggleIncidentDetail(id);
+            });
+        }
+    }
+
+    function toggleIncidentDetail(id) {
+        var container = $("#incidentDetailContainer");
+        if (expandedIncidentId === id) {
+            expandedIncidentId = null;
+            container.innerHTML = "";
+            return;
+        }
+        expandedIncidentId = id;
+        container.innerHTML = '<div class="loading">Loading incident details...</div>';
+
+        apiFetch("/api/v1/incidents/" + encodeURIComponent(id)).then(function(inc) {
+            var pd = inc.policy_decision || {};
+            var events = inc.contributing_events || [];
+            var eventsHtml = "";
+            for (var i = 0; i < events.length; i++) {
+                eventsHtml += '<span class="truncated-id" title="' + escapeHtml(String(events[i])) + '">' + truncateId(events[i]) + '</span>';
+                if (i < events.length - 1) eventsHtml += ", ";
+            }
+            if (!eventsHtml) eventsHtml = '<span class="mono">None</span>';
+
+            container.innerHTML = '<div class="detail-panel">' +
+                '<h3>Incident Detail: ' + escapeHtml(truncateId(inc.incident_id)) + '</h3>' +
+                '<div class="detail-grid">' +
+                    '<div class="detail-field"><span class="detail-label">Incident ID</span><span class="detail-value">' + escapeHtml(inc.incident_id || "--") + '</span></div>' +
+                    '<div class="detail-field"><span class="detail-label">Timestamp</span><span class="detail-value">' + formatTime(inc.timestamp) + '</span></div>' +
+                    '<div class="detail-field"><span class="detail-label">Threat Hypothesis</span><span class="detail-value">' + escapeHtml(inc.threat_hypothesis || "--") + '</span></div>' +
+                    '<div class="detail-field"><span class="detail-label">Confidence Score</span><span class="detail-value">' + Math.round((inc.confidence_score || 0) * 100) + '%</span></div>' +
+                    '<div class="detail-field"><span class="detail-label">Asset Criticality</span><span class="detail-value">' + escapeHtml(String(inc.asset_criticality || "--")) + '</span></div>' +
+                    '<div class="detail-field"><span class="detail-label">Recommended Playbook</span><span class="detail-value">' + escapeHtml(inc.recommended_playbook || "--") + '</span></div>' +
+                    '<div class="detail-field"><span class="detail-label">Execution Status</span><span class="detail-value">' + statusBadge(inc.execution_status) + '</span></div>' +
+                '</div>' +
+                '<div class="detail-section"><h4>Contributing Events</h4><div class="json-block">' + eventsHtml + '</div></div>' +
+                '<div class="detail-section"><h4>Policy Decision</h4><div class="json-block">' + escapeHtml(JSON.stringify(pd, null, 2)) + '</div></div>' +
+                '</div>';
+        }).catch(function(err) {
+            container.innerHTML = '<div class="detail-panel"><p style="color:var(--highlight);">Failed to load incident: ' + escapeHtml(String(err)) + '</p></div>';
+        });
+    }
+
+    /* ========== Audit Trail ========== */
+    var auditPhaseFilter = $("#auditPhaseFilter");
+    auditPhaseFilter.addEventListener("change", function() {
+        fetchAudit();
+    });
+
+    function fetchAudit() {
+        var phase = auditPhaseFilter.value;
+        var url = "/api/v1/audit?limit=50";
+        if (phase) url += "&phase=" + encodeURIComponent(phase);
+
+        apiFetch(url).then(function(records) {
+            renderAuditTable(Array.isArray(records) ? records : []);
+        }).catch(function() {
+            renderAuditTable([]);
+        });
+    }
+
+    function renderAuditTable(records) {
+        var tbody = $("#auditBody");
+        if (!records || records.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="6" class="empty-state">No audit records found</td></tr>';
+            return;
+        }
+        var html = "";
+        for (var i = 0; i < records.length; i++) {
+            var rec = records[i];
+            html += "<tr>" +
+                '<td class="truncated-id" title="' + escapeHtml(rec.audit_id || "") + '">' + truncateId(rec.audit_id) + "</td>" +
+                '<td class="mono">' + formatTime(rec.timestamp) + "</td>" +
+                "<td>" + phaseBadge(rec.phase) + "</td>" +
+                "<td>" + escapeHtml(String(rec.actor || "--")) + "</td>" +
+                "<td>" + escapeHtml(rec.action_taken || "--") + "</td>" +
+                '<td class="mono">' + escapeHtml(rec.policy_ref || "--") + "</td>" +
+                "</tr>";
+        }
+        tbody.innerHTML = html;
+    }
+
+    /* ========== Playbooks ========== */
+    function fetchPlaybooks() {
+        apiFetch("/api/v1/playbooks").then(function(pbs) {
+            renderPlaybooks(Array.isArray(pbs) ? pbs : []);
+        }).catch(function() {
+            renderPlaybooks([]);
+        });
+    }
+
+    function renderPlaybooks(playbooks) {
+        var grid = $("#playbooksGrid");
+        if (!playbooks || playbooks.length === 0) {
+            grid.innerHTML = '<div class="empty-state">No playbooks registered</div>';
+            return;
+        }
+        var html = "";
+        for (var i = 0; i < playbooks.length; i++) {
+            var pb = playbooks[i];
+            var trigger = pb.trigger || {};
+            var actions = trigger.actions || [];
+            var actionsStr = actions.length > 0 ? actions.join(", ") : "none";
+            var minConf = typeof trigger.min_confidence === "number" ? Math.round(trigger.min_confidence * 100) + "%" : "--";
+            var steps = pb.steps || [];
+            var isExpanded = expandedPlaybookId === pb.id;
+
+            html += '<div class="playbook-card' + (isExpanded ? " expanded" : "") + '" data-playbook-id="' + escapeHtml(pb.id) + '">' +
+                '<div class="playbook-name">' + escapeHtml(pb.name || "--") + '</div>' +
+                '<div class="playbook-id">ID: ' + escapeHtml(pb.id || "--") + '</div>' +
+                '<div class="playbook-meta">' +
+                    '<span class="playbook-meta-tag">Min Confidence: ' + minConf + '</span>' +
+                    '<span class="playbook-meta-tag">Actions: ' + escapeHtml(actionsStr) + '</span>' +
+                    '<span class="playbook-meta-tag">' + steps.length + ' step' + (steps.length !== 1 ? "s" : "") + '</span>' +
+                '</div>';
+
+            if (isExpanded) {
+                html += '<div class="playbook-steps">';
+                for (var j = 0; j < steps.length; j++) {
+                    var step = steps[j];
+                    html += '<div class="playbook-step">' +
+                        '<div class="step-number">' + (j + 1) + '</div>' +
+                        '<div class="step-content">' +
+                            '<div class="step-name">' + escapeHtml(step.name || "--") + '</div>' +
+                            '<div class="step-desc">' + escapeHtml(step.description || "") + '</div>' +
+                            '<div class="step-meta">' +
+                                '<span>Action: ' + escapeHtml(step.action || "--") + '</span>' +
+                                '<span>Timeout: ' + escapeHtml(step.timeout || "--") + '</span>' +
+                            '</div>' +
+                        '</div>' +
+                        '</div>';
+                }
+                html += '</div>';
+            }
+
+            html += '</div>';
+        }
+        grid.innerHTML = html;
+
+        var cards = grid.querySelectorAll(".playbook-card");
+        for (var k = 0; k < cards.length; k++) {
+            cards[k].addEventListener("click", function() {
+                var pid = this.getAttribute("data-playbook-id");
+                if (expandedPlaybookId === pid) {
+                    expandedPlaybookId = null;
+                } else {
+                    expandedPlaybookId = pid;
+                }
+                renderPlaybooks(playbooks);
+            });
+        }
+    }
+
+    /* ========== Test Events ========== */
+    var eventPresets = {
+        critical: {
+            source_type: "runtime",
+            source_vendor: "test",
+            asset_id: "test-workload-1",
+            asset_type: "internal-service",
+            workload_id: "default/test-pod",
+            identity_id: "system:serviceaccount:default:test",
+            environment: "test",
+            signal_class: "credential-exfiltration",
+            severity: "critical",
+            confidence: 0.95,
+            observables: { test: true, injected_by: "dashboard" },
+            evidence_refs: [],
+            suggested_actions: ["detect_only"],
+            blast_radius_hint: "isolated"
+        },
+        medium: {
+            source_type: "runtime",
+            source_vendor: "test",
+            asset_id: "test-workload-1",
+            asset_type: "internal-service",
+            workload_id: "default/test-pod",
+            identity_id: "system:serviceaccount:default:test",
+            environment: "test",
+            signal_class: "anomalous-egress",
+            severity: "medium",
+            confidence: 0.5,
+            observables: { test: true, injected_by: "dashboard" },
+            evidence_refs: [],
+            suggested_actions: ["detect_only"],
+            blast_radius_hint: "isolated"
+        },
+        low: {
+            source_type: "runtime",
+            source_vendor: "test",
+            asset_id: "test-workload-1",
+            asset_type: "internal-service",
+            workload_id: "default/test-pod",
+            identity_id: "system:serviceaccount:default:test",
+            environment: "test",
+            signal_class: "routine-scan",
+            severity: "low",
+            confidence: 0.2,
+            observables: { test: true, injected_by: "dashboard" },
+            evidence_refs: [],
+            suggested_actions: ["detect_only"],
+            blast_radius_hint: "isolated"
+        }
+    };
+
+    function setPreset(level) {
+        var editor = $("#eventJsonEditor");
+        editor.value = JSON.stringify(eventPresets[level], null, 2);
+    }
+
+    $("#presetCritical").addEventListener("click", function() { setPreset("critical"); });
+    $("#presetMedium").addEventListener("click", function() { setPreset("medium"); });
+    $("#presetLow").addEventListener("click", function() { setPreset("low"); });
+
+    /* Initialize editor with medium preset */
+    setPreset("medium");
+
+    $("#submitEventBtn").addEventListener("click", function() {
+        var editor = $("#eventJsonEditor");
+        var responseArea = $("#eventResponseArea");
+        var viewLink = $("#eventViewLink");
+        var jsonStr = editor.value.trim();
+
+        responseArea.style.display = "block";
+        responseArea.className = "response-area";
+        responseArea.textContent = "Submitting...";
+        viewLink.style.display = "none";
+
+        var parsed;
+        try {
+            parsed = JSON.parse(jsonStr);
+        } catch (e) {
+            responseArea.className = "response-area response-error";
+            responseArea.textContent = "Invalid JSON: " + e.message;
+            return;
+        }
+
+        fetch("/api/v1/events", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(parsed)
+        }).then(function(r) {
+            return r.json().then(function(body) {
+                return { status: r.status, ok: r.ok, body: body };
+            });
+        }).then(function(result) {
+            if (result.ok) {
+                responseArea.className = "response-area response-success";
+                responseArea.textContent = "Event accepted (HTTP " + result.status + ")\n\n" + JSON.stringify(result.body, null, 2);
+                viewLink.style.display = "block";
+            } else {
+                responseArea.className = "response-area response-error";
+                responseArea.textContent = "Error (HTTP " + result.status + ")\n\n" + JSON.stringify(result.body, null, 2);
+            }
+        }).catch(function(err) {
+            responseArea.className = "response-area response-error";
+            responseArea.textContent = "Network error: " + err.message;
+        });
+    });
+
+    $("#eventViewLink").addEventListener("click", function() {
+        switchView("incidents");
+    });
+
+    /* ========== Init ========== */
+    fetchHealth();
+    fetchDashboardData();
+    setupAutoRefresh();
+})();
+</script>
+</body>
+</html>

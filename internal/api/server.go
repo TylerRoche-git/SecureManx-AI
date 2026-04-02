@@ -4,6 +4,7 @@ package api
 
 import (
 	"context"
+	_ "embed"
 	"log/slog"
 	"net/http"
 
@@ -12,6 +13,9 @@ import (
 	"github.com/security-brain/security-brain/internal/playbooks"
 	"github.com/security-brain/security-brain/internal/transport"
 )
+
+//go:embed dashboard.html
+var dashboardHTML []byte
 
 // Server is the HTTP server for the security-brain operator API.
 type Server struct {
@@ -28,6 +32,8 @@ type Server struct {
 //
 // Routes (Go 1.22+ ServeMux patterns):
 //
+//	GET /                         — operator dashboard (single-page app)
+//	GET /dashboard                — operator dashboard (alias)
 //	GET /healthz                  — health check
 //	GET /api/v1/audit             — query audit records
 //	GET /api/v1/playbooks         — list all playbooks
@@ -46,6 +52,8 @@ func NewServer(addr string, auditStore *audit.Store, incidentStore *incidents.St
 		eventBus:      eventBus,
 	}
 
+	mux.HandleFunc("GET /", s.handleDashboard)
+	mux.HandleFunc("GET /dashboard", s.handleDashboard)
 	mux.HandleFunc("GET /healthz", s.handleHealth)
 	mux.HandleFunc("GET /api/v1/audit", s.handleListAudit)
 	mux.HandleFunc("GET /api/v1/playbooks", s.handleListPlaybooks)
@@ -87,4 +95,10 @@ func (s *Server) Start(ctx context.Context) error {
 // complete within the deadline provided by ctx.
 func (s *Server) Stop(ctx context.Context) error {
 	return s.httpServer.Shutdown(ctx)
+}
+
+// handleDashboard serves the embedded single-page operator dashboard HTML.
+func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Write(dashboardHTML)
 }
