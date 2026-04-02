@@ -1,0 +1,31 @@
+id: freeze-pipeline
+name: Freeze Pipeline
+trigger:
+  min_confidence: 0.3
+  actions:
+    - freeze_pipeline
+steps:
+  - name: halt-pipelines
+    action: freeze_pipeline
+    description: Halt all in-progress CI/CD pipelines touching affected artefacts
+    timeout: 60s
+  - name: quarantine-artefacts
+    action: quarantine
+    description: Move suspect artefacts to isolated registry path
+    timeout: 30s
+  - name: integrity-scan
+    action: detect_only
+    description: Run integrity scan against trust registry
+    timeout: 120s
+  - name: block-promotion
+    action: freeze_pipeline
+    description: Block promotion of any artefact built from compromised source
+    timeout: 15s
+  - name: notify-owners
+    action: detect_only
+    description: Notify build owners and security team
+    timeout: 10s
+  - name: log-provenance
+    action: detect_only
+    description: Log full artefact provenance chain
+    timeout: 10s

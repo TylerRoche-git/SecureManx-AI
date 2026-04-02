@@ -1,0 +1,79 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+    branches: [master, main]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+      - name: Vet
+        run: go vet ./...
+      - name: Staticcheck
+        uses: dominikh/staticcheck-action@v1
+        with:
+          version: "latest"
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+      - name: Test
+        run: go test ./... -race -count=1 -coverprofile=coverage.out
+      - name: Coverage
+        run: go tool cover -func=coverage.out
+
+  build:
+    runs-on: ubuntu-latest
+    needs: [lint, test]
+    strategy:
+      matrix:
+        binary:
+          - control-plane
+          - adapter-falco
+          - adapter-ci
+          - adapter-network
+          - adapter-identity
+          - adapter-gateway
+          - enforcer-k8s
+          - enforcer-istio
+          - enforcer-docker
+          - enforcer-vm
+          - enforcer-process
+          - watchdog
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+      - name: Build ${{ matrix.binary }}
+        run: CGO_ENABLED=0 go build -o bin/${{ matrix.binary }} ./cmd/${{ matrix.binary }}
+
+  docker:
+    runs-on: ubuntu-latest
+    needs: [build]
+    if: github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build control-plane image
+        run: docker build -t security-brain:${{ github.sha }} .
+      - name: Build adapter images
+        run: |
+          for adapter in adapter-falco adapter-ci adapter-network adapter-identity adapter-gateway; do
+            docker build --build-arg BINARY_NAME=$adapter -f Dockerfile.adapter -t security-brain-$adapter:${{ github.sha }} .
+          done
+      - name: Build enforcer images
+        run: |
+          for enforcer in enforcer-k8s enforcer-istio enforcer-docker enforcer-vm enforcer-process; do
+            docker build --build-arg BINARY_NAME=$enforcer -f Dockerfile.adapter -t security-brain-$enforcer:${{ github.sha }} .
+          done

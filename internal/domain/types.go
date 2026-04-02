@@ -23,6 +23,13 @@ type ControlPlaneConfig struct {
 	PlaybooksDir      string        `json:"playbooks_dir"`
 	APIAddr           string        `json:"api_addr"`
 	CorrelationWindow time.Duration `json:"correlation_window"`
+
+	// Alerting sinks — each is activated only when the corresponding env var
+	// is set. All are optional.
+	SlackWebhookURL string `json:"slack_webhook_url"` // env: SLACK_WEBHOOK_URL
+	SlackChannel    string `json:"slack_channel"`     // env: SLACK_CHANNEL, default: "#security-alerts"
+	PagerDutyKey    string `json:"pagerduty_key"`     // env: PAGERDUTY_ROUTING_KEY
+	AlertWebhookURL string `json:"alert_webhook_url"` // env: ALERT_WEBHOOK_URL
 }
 
 // LoadConfig reads configuration from environment variables, applying sensible
@@ -37,6 +44,11 @@ func LoadConfig() (*ControlPlaneConfig, error) {
 		PlaybooksDir:      envOrDefault("PLAYBOOKS_DIR", "/etc/security-brain/playbooks"),
 		APIAddr:           envOrDefault("API_ADDR", ":8080"),
 		CorrelationWindow: parseDurationOrDefault("CORRELATION_WINDOW", 5*time.Minute),
+
+		SlackWebhookURL: os.Getenv("SLACK_WEBHOOK_URL"),
+		SlackChannel:    envOrDefault("SLACK_CHANNEL", "#security-alerts"),
+		PagerDutyKey:    os.Getenv("PAGERDUTY_ROUTING_KEY"),
+		AlertWebhookURL: os.Getenv("ALERT_WEBHOOK_URL"),
 	}
 
 	return cfg, nil

@@ -1,0 +1,27 @@
+id: reroute-traffic
+name: Reroute Traffic
+trigger:
+  min_confidence: 0.3
+  actions:
+    - isolate
+steps:
+  - name: shift-traffic
+    action: isolate
+    description: Update VirtualService to shift traffic to healthy replicas
+    timeout: 30s
+  - name: apply-circuit-breaker
+    action: isolate
+    description: Apply circuit breaker on affected upstream
+    timeout: 15s
+  - name: degraded-mode
+    action: detect_only
+    description: If no healthy replicas, route to degraded-mode static response
+    timeout: 30s
+  - name: monitor-new-path
+    action: detect_only
+    description: Monitor replacement path for anomalies
+    timeout: 10s
+  - name: log-routing
+    action: detect_only
+    description: Log routing changes with before/after mesh state
+    timeout: 10s

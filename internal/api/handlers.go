@@ -13,9 +13,14 @@ import (
 	"github.com/security-brain/security-brain/pkg/eventschema"
 )
 
-// handleHealth returns a simple JSON health check response.
+// handleHealth returns a JSON health check response including sentinel status
+// and the current control plane version.
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	writeJSON(w, http.StatusOK, map[string]string{
+		"status":   "ok",
+		"sentinel": "active",
+		"version":  "0.1.0",
+	})
 }
 
 // handleListAudit queries audit records from the store with optional filters

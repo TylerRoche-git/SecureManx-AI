@@ -1,0 +1,31 @@
+id: rebuild-trusted
+name: Rebuild from Trusted State
+trigger:
+  min_confidence: 0.5
+  actions:
+    - kill_replace
+steps:
+  - name: identify-trusted-image
+    action: detect_only
+    description: Look up last known-good image from trust registry
+    timeout: 15s
+  - name: verify-image-signature
+    action: detect_only
+    description: Verify image signature and hash against pinned manifest
+    timeout: 30s
+  - name: deploy-replacement
+    action: kill_replace
+    description: Deploy replacement with original resource limits and network policy
+    timeout: 120s
+  - name: health-check
+    action: detect_only
+    description: Run integration health checks against canary traffic
+    timeout: 60s
+  - name: restore-traffic
+    action: detect_only
+    description: Restore normal traffic routing via service mesh
+    timeout: 30s
+  - name: log-recovery
+    action: detect_only
+    description: Log recovery timeline and state transitions to audit trail
+    timeout: 10s

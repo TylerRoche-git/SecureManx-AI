@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -13,6 +14,7 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
+	"github.com/security-brain/security-brain/internal/alerting"
 	"github.com/security-brain/security-brain/internal/api"
 	"github.com/security-brain/security-brain/internal/audit"
 	"github.com/security-brain/security-brain/internal/correlate"
@@ -22,6 +24,7 @@ import (
 	"github.com/security-brain/security-brain/internal/normalize"
 	"github.com/security-brain/security-brain/internal/playbooks"
 	"github.com/security-brain/security-brain/internal/policy"
+	"github.com/security-brain/security-brain/internal/sentinel"
 	"github.com/security-brain/security-brain/internal/transport"
 	"github.com/security-brain/security-brain/pkg/eventschema"
 	"github.com/security-brain/security-brain/pkg/policytypes"
@@ -39,6 +42,23 @@ func main() {
 		slog.Error("failed to load config", "error", err)
 		os.Exit(1)
 	}
+
+	// 1b. Configure alerting sinks based on environment.
+	var alertSinks []alerting.Sink
+	if cfg.SlackWebhookURL != "" {
+		alertSinks = append(alertSinks, alerting.NewSlackSink(cfg.SlackWebhookURL, cfg.SlackChannel))
+		slog.Info("alerting sink enabled", "sink", "slack", "channel", cfg.SlackChannel)
+	}
+	if cfg.PagerDutyKey != "" {
+		alertSinks = append(alertSinks, alerting.NewPagerDutySink(cfg.PagerDutyKey))
+		slog.Info("alerting sink enabled", "sink", "pagerduty")
+	}
+	if cfg.AlertWebhookURL != "" {
+		alertSinks = append(alertSinks, alerting.NewWebhookSink(cfg.AlertWebhookURL, nil))
+		slog.Info("alerting sink enabled", "sink", "webhook", "url", cfg.AlertWebhookURL)
+	}
+	alertRouter := alerting.NewRouter(alertSinks...)
+	slog.Info("alerting router created", "sinks", len(alertSinks))
 
 	// 2. Connect NATS.
 	slog.Info("connecting to NATS", "url", cfg.NATSUrl)
@@ -93,7 +113,11 @@ func main() {
 	}
 	executor := playbooks.NewExecutor(playbookReg, eventBus, auditWriter)
 
-	// 6. Subscribe to normalized events, process through engine, execute playbooks.
+	// 6. Create sentinel for control plane self-integrity monitoring.
+	binaryPath, _ := os.Executable()
+	sen := sentinel.NewSentinel(binaryPath, cfg.PolicyDir, eventBus, natsClient)
+
+	// 7. Subscribe to normalized events, process through engine, execute playbooks.
 	_, err = eventBus.SubscribeNormalized(ctx, "control-plane-processor", func(event eventschema.Event) {
 		if recErr := auditWriter.RecordDetection(ctx, &event); recErr != nil {
 			slog.Error("audit record detection failed", "error", recErr)
@@ -122,6 +146,16 @@ func main() {
 		}
 
 		if incident.PolicyDecision.Action != policytypes.ActionDetectOnly {
+			if alertErr := alertRouter.Alert(ctx, alerting.Alert{
+				Severity:   alerting.SeverityCritical,
+				Title:      "Security Incident: " + incident.ThreatHypothesis,
+				Message:    fmt.Sprintf("Action: %s, Confidence: %.2f", incident.PolicyDecision.Action, incident.ConfidenceScore),
+				IncidentID: incident.IncidentID.String(),
+				Action:     string(incident.PolicyDecision.Action),
+			}); alertErr != nil {
+				slog.Error("alert delivery failed", "error", alertErr, "incident_id", incident.IncidentID)
+			}
+
 			if execErr := executor.Execute(ctx, incident); execErr != nil {
 				slog.Error("playbook execution error", "error", execErr)
 				incident.ExecutionStatus = eventschema.StatusFailed
@@ -138,12 +172,13 @@ func main() {
 		os.Exit(1)
 	}
 
-	// 7. Start ingester and API server.
+	// 8. Start ingester, API server, and sentinel.
 	apiServer := api.NewServer(cfg.APIAddr, auditStore, incidentStore, playbookReg)
 
 	var g errgroup.Group
 	g.Go(func() error { return ingester.Start(ctx) })
 	g.Go(func() error { return apiServer.Start(ctx) })
+	g.Go(func() error { return sen.Start(ctx) })
 
 	slog.Info("control plane ready", "api", cfg.APIAddr)
 
@@ -155,6 +190,7 @@ func main() {
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer shutdownCancel()
 
+	sen.Stop()
 	if err := ingester.Stop(shutdownCtx); err != nil {
 		slog.Error("ingester shutdown error", "error", err)
 	}
