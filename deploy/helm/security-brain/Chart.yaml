@@ -1,0 +1,6 @@
+apiVersion: v2
+name: security-brain
+description: AI IDS/IPS Security Decision Fabric
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

@@ -1,0 +1,31 @@
+id: kill-replace
+name: Kill and Replace Workload
+trigger:
+  min_confidence: 0.7
+  actions:
+    - kill_replace
+steps:
+  - name: isolate-first
+    action: isolate
+    description: Apply NetworkPolicy to isolate the workload
+    timeout: 30s
+  - name: capture-evidence
+    action: detect_only
+    description: Capture pod state, logs, env, mounts to evidence store
+    timeout: 60s
+  - name: cordon-node
+    action: quarantine
+    description: Cordon node if multiple detections on same host
+    timeout: 15s
+  - name: delete-pod
+    action: kill_replace
+    description: Delete the compromised pod
+    timeout: 30s
+  - name: verify-replacement
+    action: detect_only
+    description: Verify replacement pod starts from pinned hash-verified image
+    timeout: 120s
+  - name: health-check
+    action: detect_only
+    description: Run post-start health check on replacement
+    timeout: 60s

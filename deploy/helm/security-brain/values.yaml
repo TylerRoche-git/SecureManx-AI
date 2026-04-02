@@ -1,0 +1,30 @@
+replicaCount: 1
+
+image:
+  repository: ghcr.io/security-brain/control-plane
+  tag: "0.1.0"
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 8080
+
+nats:
+  url: nats://nats:4222
+
+postgres:
+  dsn: postgres://secbrain:secbrain@postgres:5432/secbrain?sslmode=disable
+
+policy:
+  dir: /etc/security-brain/policies
+
+playbooks:
+  dir: /etc/security-brain/playbooks
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi

@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "security-brain.fullname" . }}-config
+  labels:
+    app.kubernetes.io/name: {{ include "security-brain.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+data:
+  policies: |
+    # Mount path: {{ .Values.policy.dir }}
+    # Place .rego policy files in this directory for OPA-based evaluation.
+    # The MVP uses the hardcoded policy matrix; Rego policies are loaded
+    # when present for forward-compatible evaluation.
+  playbooks: |
+    # Mount path: {{ .Values.playbooks.dir }}
+    # Place playbook YAML definitions in this directory.
+    # Each file must contain a top-level 'id' field.
+    # If no playbooks are found, built-in defaults are used.

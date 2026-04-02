@@ -1,0 +1,23 @@
+id: isolate
+name: Isolate Workload
+trigger:
+  min_confidence: 0.3
+  actions:
+    - isolate
+steps:
+  - name: apply-network-policy
+    action: isolate
+    description: Apply NetworkPolicy denying all ingress/egress except monitoring
+    timeout: 30s
+  - name: label-pod
+    action: isolate
+    description: Label pod with ids-ips/status=isolated
+    timeout: 10s
+  - name: capture-state
+    action: detect_only
+    description: Capture pod state to evidence store
+    timeout: 60s
+  - name: notify-operator
+    action: detect_only
+    description: Send event summary to operator channel
+    timeout: 10s

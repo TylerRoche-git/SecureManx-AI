@@ -1,0 +1,86 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "security-brain.fullname" . }}
+  labels:
+    app.kubernetes.io/name: {{ include "security-brain.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "security-brain.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "security-brain.name" . }}
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+      containers:
+        - name: control-plane
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          env:
+            - name: NATS_URL
+              value: {{ .Values.nats.url | quote }}
+            - name: POSTGRES_DSN
+              value: {{ .Values.postgres.dsn | quote }}
+            - name: POLICY_DIR
+              value: {{ .Values.policy.dir | quote }}
+            - name: PLAYBOOKS_DIR
+              value: {{ .Values.playbooks.dir | quote }}
+            - name: API_ADDR
+              value: ":8080"
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: {{ .Values.resources.requests.cpu }}
+              memory: {{ .Values.resources.requests.memory }}
+            limits:
+              cpu: {{ .Values.resources.limits.cpu }}
+              memory: {{ .Values.resources.limits.memory }}
+          volumeMounts:
+            - name: policy-config
+              mountPath: {{ .Values.policy.dir }}
+              readOnly: true
+            - name: playbook-config
+              mountPath: {{ .Values.playbooks.dir }}
+              readOnly: true
+      volumes:
+        - name: policy-config
+          configMap:
+            name: {{ include "security-brain.fullname" . }}-config
+            items:
+              - key: policies
+                path: policies
+        - name: playbook-config
+          configMap:
+            name: {{ include "security-brain.fullname" . }}-config
+            items:
+              - key: playbooks
+                path: playbooks
