@@ -173,7 +173,7 @@ func main() {
 	}
 
 	// 8. Start ingester, API server, and sentinel.
-	apiServer := api.NewServer(cfg.APIAddr, auditStore, incidentStore, playbookReg)
+	apiServer := api.NewServer(cfg.APIAddr, auditStore, incidentStore, playbookReg, eventBus)
 
 	var g errgroup.Group
 	g.Go(func() error { return ingester.Start(ctx) })

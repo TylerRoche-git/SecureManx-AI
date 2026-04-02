@@ -1,22 +1,38 @@
 #!/usr/bin/env bash
-# Inject a test event via the NATS CLI or direct publish.
+# Inject a test event into the security-brain pipeline via the control plane API.
 # Usage: ./scripts/inject-test-event.sh [critical|medium|low]
+#
+# The event is published to NATS and flows through:
+#   ingest → normalize → correlate → policy → playbook → audit
+#
+# After injection, query incidents to see results:
+#   curl http://localhost:8080/api/v1/incidents
 set -euo pipefail
 
+API="${SECURITY_BRAIN_API:-http://localhost:8080}"
 SEVERITY="${1:-medium}"
-CONFIDENCE="0.5"
-SIGNAL_CLASS="test-signal"
 
 case "$SEVERITY" in
-  critical) CONFIDENCE="0.95"; SIGNAL_CLASS="credential-exfiltration" ;;
-  medium)   CONFIDENCE="0.5";  SIGNAL_CLASS="anomalous-egress" ;;
-  low)      CONFIDENCE="0.2";  SIGNAL_CLASS="routine-scan" ;;
+  critical)
+    CONFIDENCE=0.95
+    SIGNAL_CLASS="credential-exfiltration"
+    ;;
+  medium)
+    CONFIDENCE=0.5
+    SIGNAL_CLASS="anomalous-egress"
+    ;;
+  low)
+    CONFIDENCE=0.2
+    SIGNAL_CLASS="routine-scan"
+    ;;
+  *)
+    echo "Usage: $0 [critical|medium|low]"
+    exit 1
+    ;;
 esac
 
 EVENT=$(cat <<ENDJSON
 {
-  "event_id": "$(uuidgen 2>/dev/null || python3 -c 'import uuid; print(uuid.uuid4())')",
-  "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
   "source_type": "runtime",
   "source_vendor": "test",
   "asset_id": "test-workload-1",
@@ -27,7 +43,7 @@ EVENT=$(cat <<ENDJSON
   "signal_class": "$SIGNAL_CLASS",
   "severity": "$SEVERITY",
   "confidence": $CONFIDENCE,
-  "observables": {"test": true},
+  "observables": {"test": true, "injected_by": "inject-test-event.sh"},
   "evidence_refs": [],
   "suggested_actions": ["detect_only"],
   "blast_radius_hint": "isolated"
@@ -35,9 +51,21 @@ EVENT=$(cat <<ENDJSON
 ENDJSON
 )
 
-echo "Injecting $SEVERITY event..."
-echo "$EVENT" | nats pub security.events.raw 2>/dev/null || \
-  curl -s -X POST http://localhost:8080/api/v1/events -d "$EVENT" -H "Content-Type: application/json" || \
-  echo "Could not inject event. Is the control plane running?"
+echo "Injecting $SEVERITY event to $API/api/v1/events..."
+RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "$API/api/v1/events" \
+  -H "Content-Type: application/json" \
+  -d "$EVENT")
 
-echo "Done. Check http://localhost:8080/api/v1/incidents"
+HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+BODY=$(echo "$RESPONSE" | head -1)
+
+if [ "$HTTP_CODE" = "202" ]; then
+  echo "Accepted: $BODY"
+  echo ""
+  echo "Wait a moment, then check:"
+  echo "  curl $API/api/v1/incidents"
+  echo "  curl $API/api/v1/audit"
+else
+  echo "Failed (HTTP $HTTP_CODE): $BODY"
+  exit 1
+fi

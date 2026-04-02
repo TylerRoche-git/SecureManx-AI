@@ -10,6 +10,7 @@ import (
 	"github.com/security-brain/security-brain/internal/audit"
 	"github.com/security-brain/security-brain/internal/incidents"
 	"github.com/security-brain/security-brain/internal/playbooks"
+	"github.com/security-brain/security-brain/internal/transport"
 )
 
 // Server is the HTTP server for the security-brain operator API.
@@ -19,6 +20,7 @@ type Server struct {
 	auditStore    *audit.Store
 	incidentStore *incidents.Store
 	playbooks     *playbooks.Registry
+	eventBus      *transport.EventBus
 }
 
 // NewServer creates a Server listening on addr with routes wired to the given
@@ -30,9 +32,10 @@ type Server struct {
 //	GET /api/v1/audit             — query audit records
 //	GET /api/v1/playbooks         — list all playbooks
 //	GET /api/v1/playbooks/{id}    — get a specific playbook by ID
-//	GET /api/v1/incidents         — list incidents with optional filters
-//	GET /api/v1/incidents/{id}    — get a specific incident by ID
-func NewServer(addr string, auditStore *audit.Store, incidentStore *incidents.Store, playbookReg *playbooks.Registry) *Server {
+//	GET  /api/v1/incidents         — list incidents with optional filters
+//	GET  /api/v1/incidents/{id}    — get a specific incident by ID
+//	POST /api/v1/events            — inject a raw event into the pipeline
+func NewServer(addr string, auditStore *audit.Store, incidentStore *incidents.Store, playbookReg *playbooks.Registry, eventBus *transport.EventBus) *Server {
 	mux := http.NewServeMux()
 
 	s := &Server{
@@ -40,6 +43,7 @@ func NewServer(addr string, auditStore *audit.Store, incidentStore *incidents.St
 		auditStore:    auditStore,
 		incidentStore: incidentStore,
 		playbooks:     playbookReg,
+		eventBus:      eventBus,
 	}
 
 	mux.HandleFunc("GET /healthz", s.handleHealth)
@@ -48,6 +52,7 @@ func NewServer(addr string, auditStore *audit.Store, incidentStore *incidents.St
 	mux.HandleFunc("GET /api/v1/playbooks/{id}", s.handleGetPlaybook)
 	mux.HandleFunc("GET /api/v1/incidents", s.handleListIncidents)
 	mux.HandleFunc("GET /api/v1/incidents/{id}", s.handleGetIncident)
+	mux.HandleFunc("POST /api/v1/events", s.handleInjectEvent)
 
 	s.httpServer = &http.Server{
 		Addr:    addr,

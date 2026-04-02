@@ -1,14 +1,20 @@
 version: "3.9"
 
 services:
+  # --- Infrastructure ---
   nats:
     image: nats:2-alpine
     ports:
       - "4222:4222"
-      - "8222:8222"  # monitoring
+      - "8222:8222"
     command: ["--jetstream", "--store_dir", "/data"]
     volumes:
       - nats-data:/data
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8222/healthz"]
+      interval: 3s
+      timeout: 2s
+      retries: 5
 
   postgres:
     image: postgres:16-alpine
@@ -20,6 +26,66 @@ services:
       POSTGRES_DB: secbrain
     volumes:
       - pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U secbrain"]
+      interval: 3s
+      timeout: 2s
+      retries: 5
+
+  # --- Core ---
+  control-plane:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      NATS_URL: nats://nats:4222
+      POSTGRES_DSN: postgres://secbrain:secbrain@postgres:5432/secbrain?sslmode=disable
+      POLICY_DIR: /app/policies
+      PLAYBOOKS_DIR: /app/playbooks
+      API_ADDR: ":8080"
+      CORRELATION_WINDOW: "5m"
+    volumes:
+      - ./policies:/app/policies:ro
+      - ./playbooks:/app/playbooks:ro
+    depends_on:
+      nats:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
+  # --- Sensor Adapters ---
+  adapter-ci:
+    build:
+      context: .
+      dockerfile: Dockerfile.adapter
+      args:
+        BINARY_NAME: adapter-ci
+    ports:
+      - "8090:8090"
+    environment:
+      NATS_URL: nats://nats:4222
+      CI_WEBHOOK_ADDR: ":8090"
+      WEBHOOK_SECRET: ""
+    depends_on:
+      nats:
+        condition: service_healthy
+
+  adapter-gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile.adapter
+      args:
+        BINARY_NAME: adapter-gateway
+    ports:
+      - "8091:8091"
+    environment:
+      NATS_URL: nats://nats:4222
+      GATEWAY_ADDR: ":8091"
+    depends_on:
+      nats:
+        condition: service_healthy
 
 volumes:
   nats-data:

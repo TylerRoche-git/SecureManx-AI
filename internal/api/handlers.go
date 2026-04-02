@@ -189,6 +189,42 @@ func (s *Server) handleGetIncident(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, incident)
 }
 
+// handleInjectEvent accepts a raw JSON event via POST and publishes it to NATS
+// for processing by the normal pipeline. This allows manual testing and
+// integration with systems that prefer HTTP over NATS.
+func (s *Server) handleInjectEvent(w http.ResponseWriter, r *http.Request) {
+	var event eventschema.Event
+	if err := json.NewDecoder(r.Body).Decode(&event); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+
+	// Fill in defaults if the caller omitted them.
+	if event.EventID == uuid.Nil {
+		event.EventID = uuid.Must(uuid.NewV7())
+	}
+	if event.Timestamp.IsZero() {
+		event.Timestamp = time.Now().UTC()
+	}
+
+	if err := eventschema.ValidateEvent(&event); err != nil {
+		writeError(w, http.StatusBadRequest, "validation failed: "+err.Error())
+		return
+	}
+
+	if err := s.eventBus.Emit(r.Context(), event); err != nil {
+		slog.Error("failed to publish event", "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to publish event")
+		return
+	}
+
+	slog.Info("event injected via API", "event_id", event.EventID, "signal_class", event.SignalClass)
+	writeJSON(w, http.StatusAccepted, map[string]string{
+		"status":   "accepted",
+		"event_id": event.EventID.String(),
+	})
+}
+
 // writeJSON serialises v as JSON with the given HTTP status code. If encoding
 // fails, a 500 error is written instead.
 func writeJSON(w http.ResponseWriter, status int, v any) {
