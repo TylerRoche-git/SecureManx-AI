@@ -4,23 +4,30 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sync"
+
+	"github.com/open-policy-agent/opa/v1/rego"
 
 	"github.com/security-brain/security-brain/pkg/eventschema"
 	"github.com/security-brain/security-brain/pkg/policytypes"
 )
 
-// Evaluator implements the correlate.PolicyEvaluator interface using the
-// hardcoded policy matrix. OPA/Rego integration is reserved for a future phase;
-// if .rego files are present in the policy directory they are noted in logs but
-// evaluation still falls back to matrix-based lookup.
+// Evaluator implements the correlate.PolicyEvaluator interface using a
+// dual-mode strategy: it first attempts OPA/Rego evaluation if compiled
+// policies are available, then falls back to the hardcoded policy matrix.
 type Evaluator struct {
 	matrix    []policytypes.PolicyMatrixEntry
 	policyDir string
+
+	mu            sync.RWMutex
+	preparedQuery *rego.PreparedEvalQuery
+	opaReady      bool
 }
 
-// NewEvaluator creates an Evaluator loaded with the default policy matrix.
-// If policyDir is non-empty and contains .rego files, a log message is emitted
-// acknowledging their presence, but evaluation uses the matrix for the MVP.
+// NewEvaluator creates an Evaluator loaded with the default policy matrix
+// and, if policyDir is non-empty and contains valid .rego files, compiles
+// them for OPA-based evaluation. If OPA compilation fails, evaluation
+// gracefully falls back to the matrix.
 func NewEvaluator(policyDir string) (*Evaluator, error) {
 	e := &Evaluator{
 		matrix:    policytypes.DefaultPolicyMatrix(),
@@ -28,13 +35,10 @@ func NewEvaluator(policyDir string) (*Evaluator, error) {
 	}
 
 	if policyDir != "" {
-		policies, err := LoadPoliciesFromDir(policyDir)
-		if err != nil {
-			slog.Warn("failed to scan policy directory", "dir", policyDir, "error", err)
-		} else if len(policies) > 0 {
-			slog.Info("OPA policy files found; using matrix-based evaluation for MVP",
+		if err := e.compileOPAPolicies(context.Background()); err != nil {
+			slog.Warn("OPA policy compilation failed, using matrix fallback",
 				"dir", policyDir,
-				"count", len(policies),
+				"error", err,
 			)
 		}
 	}
@@ -42,21 +46,156 @@ func NewEvaluator(policyDir string) (*Evaluator, error) {
 	return e, nil
 }
 
-// Evaluate looks up the appropriate enforcement actions from the policy matrix
-// based on the incident's asset criticality and confidence score.
-//
-// The incident's AssetCriticality (a Severity value) is mapped to a
-// policytypes.AssetType for the matrix lookup. The first (highest priority)
-// action from the lookup result becomes the decision's action.
-//
-// Authority is set to AuthorityRequiresHuman when the action is require_human
-// or when confidence is below 0.5 on critical assets. All other cases use
-// AuthorityAuto.
-func (e *Evaluator) Evaluate(_ context.Context, incident *eventschema.Incident) (*policytypes.PolicyDecision, error) {
+// compileOPAPolicies loads all .rego files from the policy directory,
+// compiles them, and prepares a query for evaluation.
+func (e *Evaluator) compileOPAPolicies(ctx context.Context) error {
+	policies, err := LoadPoliciesFromDir(e.policyDir)
+	if err != nil {
+		return fmt.Errorf("load policies from %s: %w", e.policyDir, err)
+	}
+
+	if len(policies) == 0 {
+		slog.Info("no .rego policy files found", "dir", e.policyDir)
+		return nil
+	}
+
+	// Build rego options with all loaded modules.
+	options := []func(*rego.Rego){
+		rego.Query("data.securitybrain.policy.decision"),
+	}
+	for _, pf := range policies {
+		options = append(options, rego.Module(pf.Path, pf.Content))
+	}
+
+	r := rego.New(options...)
+
+	prepared, err := r.PrepareForEval(ctx)
+	if err != nil {
+		return fmt.Errorf("prepare OPA evaluation query: %w", err)
+	}
+
+	e.mu.Lock()
+	e.preparedQuery = &prepared
+	e.opaReady = true
+	e.mu.Unlock()
+
+	slog.Info("OPA policies compiled and ready for evaluation",
+		"dir", e.policyDir,
+		"policy_count", len(policies),
+	)
+
+	return nil
+}
+
+// Evaluate determines the policy decision for the given incident. It first
+// attempts OPA/Rego evaluation if policies are compiled; on failure or if
+// no policies are loaded, it falls back to the hardcoded matrix lookup.
+func (e *Evaluator) Evaluate(ctx context.Context, incident *eventschema.Incident) (*policytypes.PolicyDecision, error) {
 	if incident == nil {
 		return nil, fmt.Errorf("incident must not be nil")
 	}
 
+	e.mu.RLock()
+	ready := e.opaReady
+	query := e.preparedQuery
+	e.mu.RUnlock()
+
+	if ready && query != nil {
+		decision, err := e.evaluateOPA(ctx, query, incident)
+		if err != nil {
+			slog.Warn("OPA evaluation failed, falling back to matrix",
+				"incident_id", incident.IncidentID,
+				"error", err,
+			)
+		} else {
+			return decision, nil
+		}
+	}
+
+	return e.evaluateMatrix(incident), nil
+}
+
+// evaluateOPA runs the prepared OPA query against the incident data and
+// parses the result into a PolicyDecision.
+func (e *Evaluator) evaluateOPA(ctx context.Context, query *rego.PreparedEvalQuery, incident *eventschema.Incident) (*policytypes.PolicyDecision, error) {
+	inputMap := buildOPAInput(incident)
+
+	rs, err := query.Eval(ctx, rego.EvalInput(inputMap))
+	if err != nil {
+		return nil, fmt.Errorf("OPA eval: %w", err)
+	}
+
+	if len(rs) == 0 || len(rs[0].Expressions) == 0 {
+		return nil, fmt.Errorf("OPA returned no results")
+	}
+
+	resultMap, ok := rs[0].Expressions[0].Value.(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("OPA result is not a map: %T", rs[0].Expressions[0].Value)
+	}
+
+	decision, err := parseOPADecision(resultMap)
+	if err != nil {
+		return nil, fmt.Errorf("parse OPA decision: %w", err)
+	}
+
+	slog.Info("OPA policy evaluation succeeded",
+		"incident_id", incident.IncidentID,
+		"action", decision.Action,
+		"authority_level", decision.AuthorityLevel,
+	)
+
+	return decision, nil
+}
+
+// buildOPAInput constructs the input map for OPA evaluation from an Incident.
+func buildOPAInput(incident *eventschema.Incident) map[string]interface{} {
+	return map[string]interface{}{
+		"confidence_score":        incident.ConfidenceScore,
+		"asset_criticality":       string(incident.AssetCriticality),
+		"threat_hypothesis":       incident.ThreatHypothesis,
+		"contributing_event_count": len(incident.ContributingEvents),
+	}
+}
+
+// parseOPADecision extracts action, authority_level, and rationale from the
+// OPA result map and converts them to a PolicyDecision.
+func parseOPADecision(result map[string]interface{}) (*policytypes.PolicyDecision, error) {
+	actionRaw, ok := result["action"]
+	if !ok {
+		return nil, fmt.Errorf("OPA result missing 'action' field")
+	}
+	actionStr, ok := actionRaw.(string)
+	if !ok {
+		return nil, fmt.Errorf("OPA 'action' field is not a string: %T", actionRaw)
+	}
+
+	authorityRaw, ok := result["authority_level"]
+	if !ok {
+		return nil, fmt.Errorf("OPA result missing 'authority_level' field")
+	}
+	authorityStr, ok := authorityRaw.(string)
+	if !ok {
+		return nil, fmt.Errorf("OPA 'authority_level' field is not a string: %T", authorityRaw)
+	}
+
+	rationaleStr := "OPA policy evaluation"
+	if rationaleRaw, exists := result["rationale"]; exists {
+		if s, isStr := rationaleRaw.(string); isStr {
+			rationaleStr = s
+		}
+	}
+
+	return &policytypes.PolicyDecision{
+		Action:         policytypes.ActionType(actionStr),
+		AuthorityLevel: policytypes.AuthorityLevel(authorityStr),
+		Rationale:      rationaleStr,
+	}, nil
+}
+
+// evaluateMatrix performs the original matrix-based policy lookup as a
+// fallback when OPA is unavailable or fails.
+func (e *Evaluator) evaluateMatrix(incident *eventschema.Incident) *policytypes.PolicyDecision {
 	assetType := severityToAssetType(incident.AssetCriticality)
 	actions := policytypes.LookupActions(e.matrix, assetType, incident.ConfidenceScore)
 
@@ -65,7 +204,7 @@ func (e *Evaluator) Evaluate(_ context.Context, incident *eventschema.Incident) 
 			Action:         policytypes.ActionDetectOnly,
 			AuthorityLevel: policytypes.AuthorityAuto,
 			Rationale:      "no matching policy entry; defaulting to detect-only",
-		}, nil
+		}
 	}
 
 	primaryAction := actions[0]
@@ -83,28 +222,37 @@ func (e *Evaluator) Evaluate(_ context.Context, incident *eventschema.Incident) 
 		Action:         primaryAction,
 		AuthorityLevel: authority,
 		Rationale:      rationale,
-	}, nil
+	}
 }
 
-// Reload refreshes the policy matrix. In the MVP this reloads the hardcoded
-// defaults; future versions will re-parse OPA policies from disk.
-func (e *Evaluator) Reload(_ context.Context) error {
+// Reload re-reads policies from disk and recompiles the OPA query. The
+// matrix is also refreshed from the hardcoded defaults. If OPA compilation
+// fails during reload, the evaluator retains its previous compiled query
+// and logs a warning.
+func (e *Evaluator) Reload(ctx context.Context) error {
 	e.matrix = policytypes.DefaultPolicyMatrix()
 
 	if e.policyDir != "" {
-		policies, err := LoadPoliciesFromDir(e.policyDir)
-		if err != nil {
-			slog.Warn("failed to scan policy directory during reload", "dir", e.policyDir, "error", err)
-		} else if len(policies) > 0 {
-			slog.Info("OPA policy files found during reload; still using matrix for MVP",
+		if err := e.compileOPAPolicies(ctx); err != nil {
+			slog.Warn("OPA policy recompilation failed during reload, retaining previous state",
 				"dir", e.policyDir,
-				"count", len(policies),
+				"error", err,
 			)
 		}
 	}
 
-	slog.Info("policy matrix reloaded")
+	slog.Info("policy evaluator reloaded",
+		"policy_dir", e.policyDir,
+		"opa_ready", e.opaReady,
+	)
 	return nil
+}
+
+// IsOPAReady reports whether OPA policies are compiled and ready for evaluation.
+func (e *Evaluator) IsOPAReady() bool {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.opaReady
 }
 
 // severityToAssetType maps an eventschema.Severity (used as AssetCriticality
