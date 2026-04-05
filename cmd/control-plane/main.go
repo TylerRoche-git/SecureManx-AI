@@ -260,11 +260,12 @@ func (a *App) Run(ctx context.Context) error {
 
 	slog.Info("control plane ready", "api", a.cfg.APIAddr)
 
-	if err := g.Wait(); err != nil {
+	err = g.Wait()
+	if err != nil {
 		a.logger.Error("component error", "error", err)
 	}
 
-	return g.Wait()
+	return err
 }
 
 func (a *App) Close() {
