@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -38,6 +39,7 @@ type Sentinel struct {
 	cancel         context.CancelFunc
 	startTime      time.Time
 	canaryOK       bool
+	mu sync.Mutex
 }
 
 // NewSentinel creates a new Sentinel that monitors the given binary and policy
@@ -78,8 +80,13 @@ func NewSentinel(binaryPath, policyDir string, canaryBus CanaryBus, heartbeatBus
 // Start launches the sentinel's periodic check loop. It blocks until the
 // context is cancelled or Stop is called.
 func (s *Sentinel) Start(ctx context.Context) error {
-	ctx, s.cancel = context.WithCancel(ctx)
+	ctx, cancel := context.WithCancel(ctx)
+
+	s.mu.Lock()
+	s.cancel = cancel
 	s.startTime = time.Now()
+	s.mu.Unlock()
+
 
 	slog.Info("sentinel: starting integrity monitoring",
 		"interval", s.interval,
@@ -102,9 +109,13 @@ func (s *Sentinel) Start(ctx context.Context) error {
 
 			if err := s.RunCanary(ctx); err != nil {
 				slog.Error("sentinel: canary injection failed", "error", err)
+				s.mu.Lock()
 				s.canaryOK = false
+				s.mu.Unlock()
 			} else {
+				s.mu.Lock()
 				s.canaryOK = true
+				s.mu.Unlock()
 			}
 
 			if err := s.PublishHeartbeat(ctx); err != nil {
@@ -116,9 +127,17 @@ func (s *Sentinel) Start(ctx context.Context) error {
 
 // Stop cancels the sentinel's check loop.
 func (s *Sentinel) Stop() {
-	if s.cancel != nil {
-		s.cancel()
+	s.mu.Lock()
+	cancel := s.cancel
+	s.mu.Unlock()
+
+	if cancel != nil {
+		cancel()
 	}
+
+	//if s.cancel != nil {
+	//	s.cancel()
+	//}
 }
 
 // VerifyIntegrity recomputes SHA-256 hashes of the control plane binary and
@@ -244,6 +263,11 @@ func (s *Sentinel) RunCanary(ctx context.Context) error {
 // it to JSON, and publishes it to the sentinel heartbeat subject for external
 // verification by monitors such as the watchdog process.
 func (s *Sentinel) PublishHeartbeat(ctx context.Context) error {
+    s.mu.Lock()
+    canaryOK := s.canaryOK
+    startTime := s.startTime
+    s.mu.Unlock()
+
 	binaryHash := s.expectedHashes[s.binaryPath]
 	policyHash := s.expectedHashes[s.policyDir]
 
@@ -251,8 +275,8 @@ func (s *Sentinel) PublishHeartbeat(ctx context.Context) error {
 		Timestamp:     time.Now().UTC(),
 		BinaryHash:    binaryHash,
 		PolicyHash:    policyHash,
-		CanaryOK:      s.canaryOK,
-		UptimeSeconds: int64(time.Since(s.startTime).Seconds()),
+		CanaryOK:      canaryOK,
+		UptimeSeconds: int64(time.Since(startTime).Seconds()),
 		Version:       Version,
 	}
 
