@@ -30,68 +30,78 @@ import (
 	"github.com/security-brain/security-brain/pkg/policytypes"
 )
 
-func main() {
-	slog.Info("security-brain control plane starting")
+//****************************************************************************//
+//                                Main Structs                                //
+//****************************************************************************//
+// Encapsulate all dependencies and lifecycle management
+type App struct {
+	logger *slog.Logger
+	cfg *domain.ControlPlaneConfig
+	natsClient *transport.NATSClient
+	auditStore *audit.Store
+	incidentStore *incidents.Store
+	auditWriter *audit.Writer
+	eventBus *transport.EventBus
+	ingester *ingest.Ingester
+	engine *correlate.Engine
+	executor *playbooks.Executor
+	sentinel *sentinel.Sentinel
+	alertRouter *alerting.Router
+	apiServer *api.Server
+	processor *IncidentProcessor
+}
+// Handles the subscription logic
+type IncidentProcessor struct {
+	logger *slog.Logger
+	auditWriter *audit.Writer
+	engine *correlate.Engine
+	incidentStore *incidents.Store
+	alertRouter *alerting.Router
+	executor *playbooks.Executor
+}
 
-	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer cancel()
-
-	// 1. Load config.
+//****************************************************************************//
+//                                   NewApp                                   //
+//****************************************************************************//
+func NewApp(ctx context.Context, logger *slog.Logger) (*App, error) {
+	// Load cfg
 	cfg, err := domain.LoadConfig()
 	if err != nil {
-		slog.Error("failed to load config", "error", err)
-		os.Exit(1)
+		return nil, fmt.Errorf("Failed to load cfg: %w", err)
 	}
 
-	// 1b. Configure alerting sinks based on environment.
-	var alertSinks []alerting.Sink
-	if cfg.SlackWebhookURL != "" {
-		alertSinks = append(alertSinks, alerting.NewSlackSink(cfg.SlackWebhookURL, cfg.SlackChannel))
-		slog.Info("alerting sink enabled", "sink", "slack", "channel", cfg.SlackChannel)
-	}
-	if cfg.PagerDutyKey != "" {
-		alertSinks = append(alertSinks, alerting.NewPagerDutySink(cfg.PagerDutyKey))
-		slog.Info("alerting sink enabled", "sink", "pagerduty")
-	}
-	if cfg.AlertWebhookURL != "" {
-		alertSinks = append(alertSinks, alerting.NewWebhookSink(cfg.AlertWebhookURL, nil))
-		slog.Info("alerting sink enabled", "sink", "webhook", "url", cfg.AlertWebhookURL)
-	}
-	alertRouter := alerting.NewRouter(alertSinks...)
-	slog.Info("alerting router created", "sinks", len(alertSinks))
+	// Configure alerting sinks given env
+	alertRouter := setupAlertRouter(cfg, logger)
 
-	// 2. Connect NATS.
-	slog.Info("connecting to NATS", "url", cfg.NATSUrl)
+	// Configure nats
+	logger.Info("connetingo to NATS", "url", cfg.NATSUrl)
 	natsClient, err := transport.NewNATSClient(cfg.NATSUrl)
 	if err != nil {
-		slog.Error("failed to connect to NATS", "error", err)
-		os.Exit(1)
+		return nil, fmt.Errorf("Failed to connect to NATS: %w", err)
 	}
-	defer natsClient.Close()
 
-	// 3. Create JetStream streams.
+	// Create JStreams
 	if err := natsClient.CreateAllStreams(ctx); err != nil {
-		slog.Error("failed to create JetStream streams", "error", err)
-		os.Exit(1)
+		natsClient.Close()
+		return nil, fmt.Errorf("Failed to create JetStream streams: %w", err)
 	}
 
 	// 4. Connect PostgreSQL.
-	slog.Info("connecting to PostgreSQL")
+	logger.Info("Connecting to PostgreSQL")
 	auditStore, err := audit.NewStore(ctx, cfg.PostgresDSN)
 	if err != nil {
-		slog.Error("failed to connect to PostgreSQL for audit store", "error", err)
-		os.Exit(1)
+		natsClient.Close()
+		return nil, fmt.Errorf("Failed connect to PostgreSQL for audit store: %w", err)
 	}
-	defer auditStore.Close()
 
 	incidentStore, err := incidents.NewStore(ctx, cfg.PostgresDSN)
 	if err != nil {
-		slog.Error("failed to connect to PostgreSQL for incident store", "error", err)
-		os.Exit(1)
+		auditStore.Close()
+		natsClient.Close()
+		return nil, fmt.Errorf("Failed connect to PostgreSQL for incident store: %w", err)
 	}
-	defer incidentStore.Close()
 
-	// 5. Build components.
+	// Build components
 	auditWriter := audit.NewWriter(auditStore)
 	eventBus := transport.NewEventBus(natsClient)
 	normalizer := normalize.NewNormalizer()
@@ -101,102 +111,370 @@ func main() {
 	classifier := correlate.NewClassifier(cfg.CorrelationWindow)
 	policyEval, err := policy.NewEvaluator(cfg.PolicyDir)
 	if err != nil {
-		slog.Error("failed to create policy evaluator", "error", err)
-		os.Exit(1)
+		incidentStore.Close()
+		auditStore.Close()
+		natsClient.Close()
+		return nil, fmt.Errorf("failed to create policy evaluator: %w", err)
 	}
 	engine := correlate.NewEngine(preFilter, classifier, policyEval)
 
 	playbookReg, err := playbooks.NewRegistry(cfg.PlaybooksDir)
 	if err != nil {
-		slog.Error("failed to create playbook registry", "error", err)
-		os.Exit(1)
+		incidentStore.Close()
+		auditStore.Close()
+		natsClient.Close()
+		return nil, fmt.Errorf("failed to create playbook registry: %w", err)
 	}
 	executor := playbooks.NewExecutor(playbookReg, eventBus, auditWriter)
 
-	// 6. Create sentinel for control plane self-integrity monitoring.
+	// Create sentinel for control plane self-integrity monitoring.
 	binaryPath, _ := os.Executable()
 	sen := sentinel.NewSentinel(binaryPath, cfg.PolicyDir, eventBus, natsClient)
 
-	// 7. Subscribe to normalized events, process through engine, execute playbooks.
-	_, err = eventBus.SubscribeNormalized(ctx, "control-plane-processor", func(event eventschema.Event) {
-		if recErr := auditWriter.RecordDetection(ctx, &event); recErr != nil {
-			slog.Error("audit record detection failed", "error", recErr)
-		}
-
-		incident, procErr := engine.Process(ctx, &event)
-		if procErr != nil {
-			slog.Error("correlation error", "error", procErr)
-			return
-		}
-		if incident == nil {
-			return
-		}
-
-		slog.Info("incident created",
-			"id", incident.IncidentID,
-			"hypothesis", incident.ThreatHypothesis,
-		)
-
-		if insertErr := incidentStore.Insert(ctx, incident); insertErr != nil {
-			slog.Error("failed to store incident", "error", insertErr, "id", incident.IncidentID)
-		}
-
-		if recErr := auditWriter.RecordCorrelation(ctx, incident); recErr != nil {
-			slog.Error("audit record correlation failed", "error", recErr)
-		}
-
-		if incident.PolicyDecision.Action != policytypes.ActionDetectOnly {
-			if alertErr := alertRouter.Alert(ctx, alerting.Alert{
-				Severity:   alerting.SeverityCritical,
-				Title:      "Security Incident: " + incident.ThreatHypothesis,
-				Message:    fmt.Sprintf("Action: %s, Confidence: %.2f", incident.PolicyDecision.Action, incident.ConfidenceScore),
-				IncidentID: incident.IncidentID.String(),
-				Action:     string(incident.PolicyDecision.Action),
-			}); alertErr != nil {
-				slog.Error("alert delivery failed", "error", alertErr, "incident_id", incident.IncidentID)
-			}
-
-			if execErr := executor.Execute(ctx, incident); execErr != nil {
-				slog.Error("playbook execution error", "error", execErr)
-				incident.ExecutionStatus = eventschema.StatusFailed
-			} else {
-				incident.ExecutionStatus = eventschema.StatusCompleted
-			}
-			if updateErr := incidentStore.Update(ctx, incident); updateErr != nil {
-				slog.Error("failed to update incident status", "error", updateErr, "id", incident.IncidentID)
-			}
-		}
-	})
-	if err != nil {
-		slog.Error("failed to subscribe to normalized events", "error", err)
-		os.Exit(1)
-	}
-
-	// 8. Start ingester, API server, and sentinel.
+	// Create API server
 	apiServer := api.NewServer(cfg.APIAddr, auditStore, incidentStore, playbookReg, eventBus)
 
-	var g errgroup.Group
-	g.Go(func() error { return ingester.Start(ctx) })
-	g.Go(func() error { return apiServer.Start(ctx) })
-	g.Go(func() error { return sen.Start(ctx) })
+	// Create incident processor.
+	processor := &IncidentProcessor{
+		logger:        logger,
+		auditWriter:   auditWriter,
+		engine:        engine,
+		incidentStore: incidentStore,
+		alertRouter:   alertRouter,
+		executor:      executor,
+	}
 
-	slog.Info("control plane ready", "api", cfg.APIAddr)
+	return &App{
+		logger:        logger,
+		cfg:           cfg,
+		natsClient:    natsClient,
+		auditStore:    auditStore,
+		incidentStore: incidentStore,
+		auditWriter:   auditWriter,
+		eventBus:      eventBus,
+		ingester:      ingester,
+		engine:        engine,
+		executor:      executor,
+		sentinel:      sen,
+		alertRouter:   alertRouter,
+		apiServer:     apiServer,
+		processor:     processor,
+	}, nil
+}
+
+//****************************************************************************//
+//                                 Main Tools                                 //
+//****************************************************************************//
+
+// Create sinks and return a router
+func setupAlertRouter(cfg *domain.ControlPlaneConfig, logger *slog.Logger) *alerting.Router {
+	var alertSinks []alerting.Sink
+
+	if cfg.SlackWebhookURL != "" {
+		alertSinks = append(alertSinks, alerting.NewSlackSink(cfg.SlackWebhookURL, cfg.SlackChannel))
+		logger.Info("alerting sink enabled", "sink", "slack", "channel", cfg.SlackChannel)
+	}
+	if cfg.PagerDutyKey != "" {
+		alertSinks = append(alertSinks, alerting.NewPagerDutySink(cfg.PagerDutyKey))
+		logger.Info("alerting sink enabled", "sink", "pagerduty")
+	}
+	if cfg.AlertWebhookURL != "" {
+		alertSinks = append(alertSinks, alerting.NewWebhookSink(cfg.AlertWebhookURL, nil))
+		logger.Info("alerting sink enabled", "sink", "webhook", "url", cfg.AlertWebhookURL)
+	}
+	alertRouter := alerting.NewRouter(alertSinks...)
+	logger.Info("alerting router created", "sinks", len(alertSinks))
+
+	return alertRouter
+}
+
+// Subscription callback
+func (p *IncidentProcessor) ProcessEvent(ctx context.Context, event eventschema.Event) {
+	if recErr := p.auditWriter.RecordDetection(ctx, &event); recErr != nil {
+		p.logger.Error("Audit record detection failed", "error", recErr)
+	}
+
+	incident, procErr := p.engine.Process(ctx, &event)
+	if procErr != nil {
+		p.logger.Error("correlation error", "error", procErr)
+		return
+	}
+	if incident == nil {
+		return
+	}
+
+	p.logger.Info("incident created",
+		"id", incident.IncidentID,
+		"hypothesis", incident.ThreatHypothesis,
+	)
+
+	if insertErr := p.incidentStore.Insert(ctx, incident); insertErr != nil {
+		p.logger.Error("failed to store incident", "error", insertErr, "id", incident.IncidentID)
+	}
+
+	if recErr := p.auditWriter.RecordCorrelation(ctx, incident); recErr != nil {
+		p.logger.Error("audit record correlation failed", "error", recErr)
+	}
+
+	if incident.PolicyDecision.Action != policytypes.ActionDetectOnly {
+		if alertErr := p.alertRouter.Alert(ctx, alerting.Alert{
+			Severity:   alerting.SeverityCritical,
+			Title:      "Security Incident: " + incident.ThreatHypothesis,
+			Message:    fmt.Sprintf("Action: %s, Confidence: %.2f", incident.PolicyDecision.Action, incident.ConfidenceScore),
+			IncidentID: incident.IncidentID.String(),
+			Action:     string(incident.PolicyDecision.Action),
+		}); alertErr != nil {
+			p.logger.Error("alert delivery failed", "error", alertErr, "incident_id", incident.IncidentID)
+		}
+
+		if execErr := p.executor.Execute(ctx, incident); execErr != nil {
+			p.logger.Error("playbook execution error", "error", execErr)
+			incident.ExecutionStatus = eventschema.StatusFailed
+		} else {
+			incident.ExecutionStatus = eventschema.StatusCompleted
+		}
+		if updateErr := p.incidentStore.Update(ctx, incident); updateErr != nil {
+			p.logger.Error("failed to update incident status", "error", updateErr, "id", incident.IncidentID)
+		}
+	}
+}
+
+
+//****************************************************************************//
+//                                Run and Close                               //
+//****************************************************************************//
+func (a *App) Run(ctx context.Context) error {
+	// Subscribe to events
+    _, err := a.eventBus.SubscribeNormalized(ctx, "control-plane-processor", func(event eventschema.Event) {
+        a.processor.ProcessEvent(ctx, event)
+    })
+	if err != nil {
+		return fmt.Errorf("Failed to subscribe to nromalized events: %w", err)
+	}
+
+	// Start ingestor
+	var g errgroup.Group
+	g.Go(func() error { return a.ingester.Start(ctx) })
+	g.Go(func() error { return a.apiServer.Start(ctx) })
+	g.Go(func() error { return a.sentinel.Start(ctx) })
+
+	slog.Info("control plane ready", "api", a.cfg.APIAddr)
 
 	if err := g.Wait(); err != nil {
-		slog.Error("component error", "error", err)
+		a.logger.Error("component error", "error", err)
 	}
 
-	// Graceful shutdown.
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	return g.Wait()
+}
+
+func (a *App) Close() {
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 15 * time.Second)
 	defer shutdownCancel()
 
-	sen.Stop()
-	if err := ingester.Stop(shutdownCtx); err != nil {
-		slog.Error("ingester shutdown error", "error", err)
+	a.sentinel.Stop()
+	if err := a.ingester.Stop(shutdownCtx); err != nil {
+		a.logger.Error("Ingester shutdown failed", "error", err)
 	}
-	if err := apiServer.Stop(shutdownCtx); err != nil {
-		slog.Error("api server shutdown error", "error", err)
+	if err := a.apiServer.Stop(shutdownCtx); err != nil {
+		a.logger.Error("API server shutdown failed", "error", err)
 	}
 
-	slog.Info("control plane stopped")
+	a.incidentStore.Close()
+	a.auditStore.Close()
+	a.natsClient.Close()
+
+	a.logger.Info("Control plane stopped")
 }
+
+//****************************************************************************//
+//                                    Main                                    //
+//****************************************************************************//
+func main() {
+	logger := slog.Default()
+	logger.Info("security-brain control plane starting")
+
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
+
+	app, err := NewApp(ctx, logger)
+	if err != nil {
+		logger.Error("Failed to init app", "error", err)
+		os.Exit(1)
+	}
+	defer app.Close()
+
+	if err := app.Run(ctx); err != nil {
+		logger.Error("Component error", "error", err)
+	}
+}
+
+//func main_old() {
+//	slog.Info("security-brain control plane starting")
+//
+//	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+//	defer cancel()
+//
+//	// 1. Load config.
+//	cfg, err := domain.LoadConfig()
+//	if err != nil {
+//		slog.Error("failed to load config", "error", err)
+//		os.Exit(1)
+//	}
+//
+//	// 1b. Configure alerting sinks based on environment.
+//	var alertSinks []alerting.Sink
+//	if cfg.SlackWebhookURL != "" {
+//		alertSinks = append(alertSinks, alerting.NewSlackSink(cfg.SlackWebhookURL, cfg.SlackChannel))
+//		slog.Info("alerting sink enabled", "sink", "slack", "channel", cfg.SlackChannel)
+//	}
+//	if cfg.PagerDutyKey != "" {
+//		alertSinks = append(alertSinks, alerting.NewPagerDutySink(cfg.PagerDutyKey))
+//		slog.Info("alerting sink enabled", "sink", "pagerduty")
+//	}
+//	if cfg.AlertWebhookURL != "" {
+//		alertSinks = append(alertSinks, alerting.NewWebhookSink(cfg.AlertWebhookURL, nil))
+//		slog.Info("alerting sink enabled", "sink", "webhook", "url", cfg.AlertWebhookURL)
+//	}
+//	alertRouter := alerting.NewRouter(alertSinks...)
+//	slog.Info("alerting router created", "sinks", len(alertSinks))
+//
+//	// 2. Connect NATS.
+//	slog.Info("connecting to NATS", "url", cfg.NATSUrl)
+//	natsClient, err := transport.NewNATSClient(cfg.NATSUrl)
+//	if err != nil {
+//		slog.Error("failed to connect to NATS", "error", err)
+//		os.Exit(1)
+//	}
+//	defer natsClient.Close()
+//
+//	// 3. Create JetStream streams.
+//	if err := natsClient.CreateAllStreams(ctx); err != nil {
+//		slog.Error("failed to create JetStream streams", "error", err)
+//		os.Exit(1)
+//	}
+//
+//	// 4. Connect PostgreSQL.
+//	slog.Info("connecting to PostgreSQL")
+//	auditStore, err := audit.NewStore(ctx, cfg.PostgresDSN)
+//	if err != nil {
+//		slog.Error("failed to connect to PostgreSQL for audit store", "error", err)
+//		os.Exit(1)
+//	}
+//	defer auditStore.Close()
+//
+//	incidentStore, err := incidents.NewStore(ctx, cfg.PostgresDSN)
+//	if err != nil {
+//		slog.Error("failed to connect to PostgreSQL for incident store", "error", err)
+//		os.Exit(1)
+//	}
+//	defer incidentStore.Close()
+//
+//	// 5. Build components.
+//	auditWriter := audit.NewWriter(auditStore)
+//	eventBus := transport.NewEventBus(natsClient)
+//	normalizer := normalize.NewNormalizer()
+//	ingester := ingest.NewIngester(natsClient, eventBus, normalizer)
+//
+//	preFilter := correlate.NewPreFilter()
+//	classifier := correlate.NewClassifier(cfg.CorrelationWindow)
+//	policyEval, err := policy.NewEvaluator(cfg.PolicyDir)
+//	if err != nil {
+//		slog.Error("failed to create policy evaluator", "error", err)
+//		os.Exit(1)
+//	}
+//	engine := correlate.NewEngine(preFilter, classifier, policyEval)
+//
+//	playbookReg, err := playbooks.NewRegistry(cfg.PlaybooksDir)
+//	if err != nil {
+//		slog.Error("failed to create playbook registry", "error", err)
+//		os.Exit(1)
+//	}
+//	executor := playbooks.NewExecutor(playbookReg, eventBus, auditWriter)
+//
+//	// 6. Create sentinel for control plane self-integrity monitoring.
+//	binaryPath, _ := os.Executable()
+//	sen := sentinel.NewSentinel(binaryPath, cfg.PolicyDir, eventBus, natsClient)
+//
+//	// 7. Subscribe to normalized events, process through engine, execute playbooks.
+//	_, err = eventBus.SubscribeNormalized(ctx, "control-plane-processor", func(event eventschema.Event) {
+//		if recErr := auditWriter.RecordDetection(ctx, &event); recErr != nil {
+//			slog.Error("audit record detection failed", "error", recErr)
+//		}
+//
+//		incident, procErr := engine.Process(ctx, &event)
+//		if procErr != nil {
+//			slog.Error("correlation error", "error", procErr)
+//			return
+//		}
+//		if incident == nil {
+//			return
+//		}
+//
+//		slog.Info("incident created",
+//			"id", incident.IncidentID,
+//			"hypothesis", incident.ThreatHypothesis,
+//		)
+//
+//		if insertErr := incidentStore.Insert(ctx, incident); insertErr != nil {
+//			slog.Error("failed to store incident", "error", insertErr, "id", incident.IncidentID)
+//		}
+//
+//		if recErr := auditWriter.RecordCorrelation(ctx, incident); recErr != nil {
+//			slog.Error("audit record correlation failed", "error", recErr)
+//		}
+//
+//		if incident.PolicyDecision.Action != policytypes.ActionDetectOnly {
+//			if alertErr := alertRouter.Alert(ctx, alerting.Alert{
+//				Severity:   alerting.SeverityCritical,
+//				Title:      "Security Incident: " + incident.ThreatHypothesis,
+//				Message:    fmt.Sprintf("Action: %s, Confidence: %.2f", incident.PolicyDecision.Action, incident.ConfidenceScore),
+//				IncidentID: incident.IncidentID.String(),
+//				Action:     string(incident.PolicyDecision.Action),
+//			}); alertErr != nil {
+//				slog.Error("alert delivery failed", "error", alertErr, "incident_id", incident.IncidentID)
+//			}
+//
+//			if execErr := executor.Execute(ctx, incident); execErr != nil {
+//				slog.Error("playbook execution error", "error", execErr)
+//				incident.ExecutionStatus = eventschema.StatusFailed
+//			} else {
+//				incident.ExecutionStatus = eventschema.StatusCompleted
+//			}
+//			if updateErr := incidentStore.Update(ctx, incident); updateErr != nil {
+//				slog.Error("failed to update incident status", "error", updateErr, "id", incident.IncidentID)
+//			}
+//		}
+//	})
+//	if err != nil {
+//		slog.Error("failed to subscribe to normalized events", "error", err)
+//		os.Exit(1)
+//	}
+//
+//	// 8. Start ingester, API server, and sentinel.
+//	apiServer := api.NewServer(cfg.APIAddr, auditStore, incidentStore, playbookReg, eventBus)
+//
+//	var g errgroup.Group
+//	g.Go(func() error { return ingester.Start(ctx) })
+//	g.Go(func() error { return apiServer.Start(ctx) })
+//	g.Go(func() error { return sen.Start(ctx) })
+//
+//	slog.Info("control plane ready", "api", cfg.APIAddr)
+//
+//	if err := g.Wait(); err != nil {
+//		slog.Error("component error", "error", err)
+//	}
+//
+//	// Graceful shutdown.
+//	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 15*time.Second)
+//	defer shutdownCancel()
+//
+//	sen.Stop()
+//	if err := ingester.Stop(shutdownCtx); err != nil {
+//		slog.Error("ingester shutdown error", "error", err)
+//	}
+//	if err := apiServer.Stop(shutdownCtx); err != nil {
+//		slog.Error("api server shutdown error", "error", err)
+//	}
+//
+//	slog.Info("control plane stopped")
+//}
