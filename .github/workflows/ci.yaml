@@ -29,6 +29,8 @@ jobs:
         with:
           go-version: '1.24'
       - name: Test
+        env: # Force legacy coverage #GOEXPERIMENT: nocoverageredesign  # Force legacy coverage
+          GOTOOLCHAIN: go1.24.0+auto
         run: go test ./... -race -count=1 -coverprofile=coverage.out
       - name: Coverage
         run: go tool cover -func=coverage.out
